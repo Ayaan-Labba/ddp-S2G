@@ -4,56 +4,33 @@ S2G custom Seq2SeqTrainer.
 Shared by ``pretrain.py`` (REBEL, Experiment 3) and ``finetune.py``
 (CoNLL04 / NYT-multi / SciERC, Experiment 1).
 
-Changes from the original pretrain.py S2GTrainer
--------------------------------------------------
-1. **No eval_collator / get_eval_dataloader override.**  The separate
-   evaluation collator has been eliminated.  The training collator is used
-   for both training and (in scripts that still need a collator-based eval
-   loop) evaluation.
-
-2. **Multi-task compute_loss.**  The collator now returns a flat dict keyed
-   ``{task_key}_{input_ids|attention_mask|labels}`` for each task the
-   model handles.  ``compute_loss`` unpacks these, runs one forward pass
-   per task, and returns the sum — a single shared optimizer step covers
-   all tasks.
-
-3. **Sequential pipeline evaluate().**  Validation no longer goes through
-   the standard HF evaluation loop.  Instead, ``evaluate()`` runs each
-   task in dependency order (Boundary → NER → RE for the Pipeline model;
-   independent Joint + Joint+ for the Joint model), builds downstream
-   encoder inputs from upstream predictions, and assembles structured
-   predictions for metric computation.
-
-4. **Scheduler.**  Supports ``"inverse_sqrt"`` (default, used by REBEL
-   pre-training) and ``"cosine"`` (Experiment 1 fine-tuning).  Controlled
-   by the ``scheduler_type`` constructor argument; all other Trainer
-   scheduling behaviour is unchanged.
+``compute_loss`` runs one forward pass per task and sums the per-task
+cross-entropy losses before returning a single scalar for the optimizer
+step.  ``evaluate()`` replaces the standard HF loop with sequential
+pipeline evaluation (Boundary → NER → RE) or independent joint evaluation
+(Joint ‖ Joint+).  Two LR schedulers are supported: ``"cosine"``
+(Experiment 1) and ``"inverse_sqrt"`` (Experiment 3).
 
 Constructor extra kwargs
 ------------------------
 All standard ``Seq2SeqTrainer`` kwargs are forwarded to the parent.  The
-following keyword-only arguments are consumed by ``S2GTrainer`` itself
-before the super-call:
+following keyword-only arguments are consumed by ``S2GTrainer``:
 
 ``model_variant``       ``"pipeline"`` | ``"joint"``
 ``tokens``              ``PIPELINE_TOKENS`` or ``JOINT_TOKENS``
 ``entity_schema``       Sorted list of entity-type strings for SSI.
 ``rel_schema``          Sorted list of relation-type strings for SSI.
-``eval_cfg``            Dict; see *Eval config keys* below.
+``eval_cfg``            Dict with keys ``max_source_length``,
+                        ``max_target_length``, ``eval_batch_size``,
+                        ``eval_beams``.
 ``train_eval_dataset``  Optional :class:`~s2g.data.S2GDataset`
                         for the training-subsample evaluation pass.
 ``scheduler_type``      ``"inverse_sqrt"`` (default) | ``"cosine"``
-
-Eval config keys
-----------------
-``max_source_length``   Max encoder input length (subword tokens).
-``max_target_length``   Max decoder output length.
-``eval_batch_size``     Inference batch size.
-``eval_beams``          Beam width for generation.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -86,9 +63,7 @@ _JOINT_TASK_KEYS:    Tuple[str, ...] = ("joint", "joint_plus")
 _ALL_TASK_KEYS:      Tuple[str, ...] = _PIPELINE_TASK_KEYS + _JOINT_TASK_KEYS
 
 
-# ===================================================================== #
-#                         MODULE HELPERS                                #
-# ===================================================================== #
+# ---- MODULE HELPERS ----
 
 
 def _unwrap_model(model: Any) -> Any:
@@ -207,9 +182,7 @@ def _assemble_joint_plus_quintuples(
     return quintuples
 
 
-# ===================================================================== #
-#                            S2G TRAINER                                #
-# ===================================================================== #
+# ---- S2G TRAINER ----
 
 
 class S2GTrainer(Seq2SeqTrainer):
@@ -236,9 +209,7 @@ class S2GTrainer(Seq2SeqTrainer):
         self._eval_bs: int  = self._eval_cfg["eval_batch_size"]
         self._eval_beams: int = self._eval_cfg["eval_beams"]
 
-    # ------------------------------------------------------------------ #
-    #  Scheduler                                                          #
-    # ------------------------------------------------------------------ #
+    # --- Scheduler ---
 
     def create_scheduler(
         self,
@@ -328,9 +299,7 @@ class S2GTrainer(Seq2SeqTrainer):
             return total_loss, last_outputs
         return total_loss
 
-    # ------------------------------------------------------------------ #
-    #  Evaluation entry point                                              #
-    # ------------------------------------------------------------------ #
+    # --- Evaluation entry point ---
 
     def evaluate(
         self,
@@ -388,9 +357,7 @@ class S2GTrainer(Seq2SeqTrainer):
         self.log(all_metrics)
         return all_metrics
 
-    # ------------------------------------------------------------------ #
-    #  Dataset-level dispatch                                              #
-    # ------------------------------------------------------------------ #
+    # --- Dataset-level dispatch ---
 
     def _evaluate_dataset(
         self,
@@ -405,9 +372,7 @@ class S2GTrainer(Seq2SeqTrainer):
             metrics = self._evaluate_joint(instances)
         return {f"{prefix}_{k}": v for k, v in metrics.items()}
 
-    # ------------------------------------------------------------------ #
-    #  Pipeline evaluation (Boundary → NER → RE)                          #
-    # ------------------------------------------------------------------ #
+    # --- Pipeline evaluation (Boundary → NER → RE) ---
 
     def _evaluate_pipeline(
         self,
@@ -509,9 +474,7 @@ class S2GTrainer(Seq2SeqTrainer):
 
         return metrics
 
-    # ------------------------------------------------------------------ #
-    #  Joint evaluation (Joint ‖ Joint+)                                   #
-    # ------------------------------------------------------------------ #
+    # --- Joint evaluation (Joint ‖ Joint+) ---
 
     def _evaluate_joint(
         self,
@@ -589,9 +552,15 @@ class S2GTrainer(Seq2SeqTrainer):
 
         return metrics
 
-    # ------------------------------------------------------------------ #
-    #  Generation helper                                                   #
-    # ------------------------------------------------------------------ #
+    # --- Generation helper ---
+
+    def _autocast_ctx(self) -> contextlib.AbstractContextManager:
+        """Return an autocast context appropriate for the training precision."""
+        if self.args.bf16 and self.args.device.type == "cuda":
+            return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if self.args.fp16 and self.args.device.type == "cuda":
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return contextlib.nullcontext()
 
     def _run_generation(
         self,
@@ -623,7 +592,7 @@ class S2GTrainer(Seq2SeqTrainer):
             input_ids      = tok_out["input_ids"].to(self.args.device)
             attention_mask = tok_out["attention_mask"].to(self.args.device)
 
-            with torch.no_grad():
+            with torch.inference_mode(), self._autocast_ctx():
                 generated = raw_model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,

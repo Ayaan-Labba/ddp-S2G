@@ -29,12 +29,14 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import nltk
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -50,15 +52,12 @@ from s2g.linearisation import (
     build_re_encoder_input,
     extract_triplets,
     find_all_token_spans,
-    find_token_span,
     parse_sel,
 )
 from s2g.model import build_constraint_processor
 from s2g.scripts.config_utils import load_entity_schema, load_schema
 
 logger = logging.getLogger(__name__)
-
-import nltk
 
 
 def _tokenize(text: str) -> List[str]:
@@ -107,7 +106,13 @@ def _generate_single(
             )
         ]
 
-    with torch.no_grad():
+    param_dtype = next(model.parameters()).dtype
+    autocast_ctx = (
+        torch.autocast(device_type=device.type, dtype=param_dtype)
+        if param_dtype in (torch.bfloat16, torch.float16) and device.type == "cuda"
+        else contextlib.nullcontext()
+    )
+    with torch.inference_mode(), autocast_ctx:
         generated = model.generate(**gen_kwargs)
 
     raw = tokenizer.decode(generated[0], skip_special_tokens=False)

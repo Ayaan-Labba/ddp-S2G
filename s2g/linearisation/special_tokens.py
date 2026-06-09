@@ -41,9 +41,7 @@ from typing import Dict, List, Optional, Union
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 
-# ===================================================================== #
-#                       TOKEN REGISTRY CLASSES                          #
-# ===================================================================== #
+# ---- TOKEN REGISTRY CLASSES ----
 
 
 @dataclass(frozen=True)
@@ -54,24 +52,6 @@ class PipelineTokens:
     and RE.  Each task has its own delimiter token that immediately follows
     the SSI prefix (or opens the sequence for Boundary, which has no SSI).
 
-    Attributes
-    ----------
-    bound:      Task delimiter for Boundary.  Encoder-only.
-    ner:        Task delimiter for NER.  Encoder-only.
-    re:         Task delimiter for RE.  Encoder-only.
-    type_:      Introduces one entity type in the NER SSI; annotates the
-                entity type inline in the RE augmented text; emits the
-                entity type label in NER SEL output.  Encoder + decoder.
-    rel:        Introduces one relation type in the RE SSI; opens a
-                relation block in the RE SEL output.  Encoder + decoder.
-    ent_start:  Marks the opening of an entity span in the NER/RE
-                augmented encoder text; opens an entity block in SEL.
-                Encoder + decoder.
-    ent_end:    Closes the entity span in augmented encoder text; closes
-                the entity block in SEL.  Encoder + decoder.
-    tail:       Introduces the tail-entity span within a relation block
-                in SEL.  Decoder-only.
-    null:       Opens the rejection block in SEL.  Decoder-only.
     """
 
     # Task delimiter tokens (encoder-only)
@@ -134,20 +114,6 @@ class JointTokens:
     Both tasks take raw text as input; the SSI lists relation types (Joint)
     or entity types followed by relation types (Joint+).
 
-    Attributes
-    ----------
-    joint:      Task delimiter for Joint.  Encoder-only.
-    joint_plus: Task delimiter for Joint+.  Encoder-only.
-    type_:      Introduces one entity type in the Joint+ SSI; emits the
-                entity type label in Joint+ SEL output.  Encoder + decoder.
-    rel:        Introduces one relation type in the Joint/Joint+ SSI;
-                opens a relation block in SEL.  Encoder + decoder.
-    ent_start:  Opens an entity block in SEL.  Decoder-only in the Joint
-                model (no entity-augmented encoder text).
-    ent_end:    Closes an entity block in SEL.  Decoder-only.
-    tail:       Introduces the tail-entity span within a relation block
-                in SEL.  Decoder-only.
-    null:       Opens the rejection block in SEL.  Decoder-only.
     """
 
     # Task delimiter tokens (encoder-only)
@@ -195,9 +161,7 @@ class JointTokens:
         }
 
 
-# ===================================================================== #
-#                       MODULE-LEVEL SINGLETONS                         #
-# ===================================================================== #
+# ---- MODULE-LEVEL SINGLETONS ----
 
 PIPELINE_TOKENS: PipelineTokens = PipelineTokens()
 JOINT_TOKENS:    JointTokens    = JointTokens()
@@ -206,9 +170,7 @@ JOINT_TOKENS:    JointTokens    = JointTokens()
 AnyTokens = Union[PipelineTokens, JointTokens]
 
 
-# ===================================================================== #
-#                         UTILITY FUNCTIONS                             #
-# ===================================================================== #
+# ---- UTILITY FUNCTIONS ----
 
 
 def add_special_tokens_to_tokenizer(

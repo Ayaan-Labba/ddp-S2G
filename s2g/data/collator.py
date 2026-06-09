@@ -130,9 +130,7 @@ class S2GCollator:
         # Step counter — updated by StepTrackingCallback in Bernoulli mode.
         self._step: int = 0
 
-    # ------------------------------------------------------------------ #
-    #  Step tracking                                                       #
-    # ------------------------------------------------------------------ #
+    # --- Step tracking ---
 
     @property
     def current_step(self) -> int:
@@ -143,9 +141,7 @@ class S2GCollator:
         """Update the global step.  Used by StepTrackingCallback."""
         self._step = value
 
-    # ------------------------------------------------------------------ #
-    #  Public interface                                                    #
-    # ------------------------------------------------------------------ #
+    # --- Public interface ---
 
     def __call__(self, batch: List[Dict]) -> Dict[str, Any]:
         """Collate *batch* into a multi-task dict of tokenised tensors."""
@@ -153,9 +149,7 @@ class S2GCollator:
             return self._collate_pipeline(batch)
         return self._collate_joint(batch)
 
-    # ------------------------------------------------------------------ #
-    #  Variant-level collation                                             #
-    # ------------------------------------------------------------------ #
+    # --- Variant-level collation ---
 
     def _collate_pipeline(self, batch: List[Dict]) -> Dict[str, Any]:
         b_enc, b_dec = [], []
@@ -163,9 +157,10 @@ class S2GCollator:
         r_enc, r_dec = [], []
 
         for inst in batch:
-            bi, bo = self._prepare_boundary(inst)
-            ni, no = self._prepare_ner(inst)
-            ri, ro = self._prepare_re(inst)
+            blocks = organize_by_entity(inst["entities"], inst["relations"])
+            bi, bo = self._prepare_boundary(inst, blocks)
+            ni, no = self._prepare_ner(inst, blocks)
+            ri, ro = self._prepare_re(inst, blocks)
             b_enc.append(bi); b_dec.append(bo)
             n_enc.append(ni); n_dec.append(no)
             r_enc.append(ri); r_dec.append(ro)
@@ -181,8 +176,9 @@ class S2GCollator:
         jp_enc, jp_dec = [], []
 
         for inst in batch:
-            ji, jo   = self._prepare_joint(inst)
-            jpi, jpo = self._prepare_joint_plus(inst)
+            blocks = organize_by_entity(inst["entities"], inst["relations"])
+            ji, jo   = self._prepare_joint(inst, blocks)
+            jpi, jpo = self._prepare_joint_plus(inst, blocks)
             j_enc.append(ji);   j_dec.append(jo)
             jp_enc.append(jpi); jp_dec.append(jpo)
 
@@ -191,18 +187,15 @@ class S2GCollator:
         result.update(self._tokenize_task("joint_plus", jp_enc, jp_dec))
         return result
 
-    # ------------------------------------------------------------------ #
-    #  Per-task instance preparation                                       #
-    # ------------------------------------------------------------------ #
+    # --- Per-task instance preparation ---
 
-    def _prepare_boundary(self, inst: Dict) -> Tuple[str, str]:
-        entity_blocks = organize_by_entity(inst["entities"], inst["relations"])
+    def _prepare_boundary(self, inst: Dict, entity_blocks: List) -> Tuple[str, str]:
         enc = build_boundary_encoder_input(inst["text"], tok=self._tok)
         dec = build_sel(entity_blocks, "boundary", self._tok,
                         random_sel=self._random_sel)
         return enc, dec
 
-    def _prepare_ner(self, inst: Dict) -> Tuple[str, str]:
+    def _prepare_ner(self, inst: Dict, entity_blocks: List) -> Tuple[str, str]:
         pos_ent, neg_ent = self._sample_types(
             inst["entity_types"],
             self._entity_schema,
@@ -213,7 +206,6 @@ class S2GCollator:
             (int(e["offset"][0]), int(e["offset"][1]))
             for e in inst["entities"]
         ]
-        entity_blocks = organize_by_entity(inst["entities"], inst["relations"])
         enc = build_ner_encoder_input(
             pos_ent + neg_ent, inst["tokens"], entity_spans,
             random_order=self._random_prompt, tok=self._tok,
@@ -223,7 +215,7 @@ class S2GCollator:
                         random_sel=self._random_sel)
         return enc, dec
 
-    def _prepare_re(self, inst: Dict) -> Tuple[str, str]:
+    def _prepare_re(self, inst: Dict, entity_blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"],
             self._rel_schema,
@@ -234,7 +226,6 @@ class S2GCollator:
             (int(e["offset"][0]), int(e["offset"][1]), e["type"])
             for e in inst["entities"]
         ]
-        entity_blocks = organize_by_entity(inst["entities"], inst["relations"])
         enc = build_re_encoder_input(
             pos_rel + neg_rel, inst["tokens"], entity_data,
             random_order=self._random_prompt, tok=self._tok,
@@ -244,14 +235,13 @@ class S2GCollator:
                         random_sel=self._random_sel)
         return enc, dec
 
-    def _prepare_joint(self, inst: Dict) -> Tuple[str, str]:
+    def _prepare_joint(self, inst: Dict, entity_blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"],
             self._rel_schema,
             self._rel_schema_set,
             self._cfg.get("max_rel_types_in_prompt"),
         )
-        entity_blocks = organize_by_entity(inst["entities"], inst["relations"])
         enc = build_joint_encoder_input(
             pos_rel + neg_rel, inst["text"],
             random_order=self._random_prompt, tok=self._tok,
@@ -261,7 +251,7 @@ class S2GCollator:
                         random_sel=self._random_sel)
         return enc, dec
 
-    def _prepare_joint_plus(self, inst: Dict) -> Tuple[str, str]:
+    def _prepare_joint_plus(self, inst: Dict, entity_blocks: List) -> Tuple[str, str]:
         pos_ent, neg_ent = self._sample_types(
             inst["entity_types"],
             self._entity_schema,
@@ -274,7 +264,6 @@ class S2GCollator:
             self._rel_schema_set,
             self._cfg.get("max_rel_types_in_prompt"),
         )
-        entity_blocks = organize_by_entity(inst["entities"], inst["relations"])
         enc = build_joint_plus_encoder_input(
             pos_ent + neg_ent, pos_rel + neg_rel, inst["text"],
             random_order=self._random_prompt, tok=self._tok,
@@ -285,9 +274,7 @@ class S2GCollator:
                         random_sel=self._random_sel)
         return enc, dec
 
-    # ------------------------------------------------------------------ #
-    #  SSI sampling — mode dispatch                                        #
-    # ------------------------------------------------------------------ #
+    # --- SSI sampling — mode dispatch ---
 
     def _sample_types(
         self,
@@ -411,9 +398,7 @@ class S2GCollator:
         ))
         return pos_rate, neg_rate, k
 
-    # ------------------------------------------------------------------ #
-    #  Tokenisation                                                        #
-    # ------------------------------------------------------------------ #
+    # --- Tokenisation ---
 
     def _tokenize_task(
         self,
@@ -438,14 +423,13 @@ class S2GCollator:
             return_tensors="pt",
         )
 
-        with self._tokenizer.as_target_tokenizer():
-            label_enc = self._tokenizer(
-                decoder_targets,
-                max_length=max_tgt,
-                truncation=True,
-                padding="longest",
-                return_tensors="pt",
-            )
+        label_enc = self._tokenizer(
+            decoder_targets,
+            max_length=max_tgt,
+            truncation=True,
+            padding="longest",
+            return_tensors="pt",
+        )
 
         label_ids = label_enc["input_ids"].clone()
         label_ids[label_ids == self._tokenizer.pad_token_id] = -100

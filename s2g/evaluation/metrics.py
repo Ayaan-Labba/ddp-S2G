@@ -21,11 +21,6 @@ All corpus-level functions index predictions by instance position so that
 the same entity span appearing in multiple instances is not deduplicated
 across instances.
 
-Backward compatibility
-----------------------
-The original ``compute_metrics(all_pred, all_gold, mode=...)`` interface
-is preserved unchanged so that ``pretrain.py`` continues to work without
-modification.  New code should use :func:`compute_metrics_for_task`.
 """
 
 from __future__ import annotations
@@ -40,9 +35,7 @@ Quintuple     = Tuple[str, str, str, str, str]  # (head, head_type, rel_type, ta
 EntityMention = Tuple[str, str]                # (text, type)
 
 
-# ===================================================================== #
-#                         CORE P / R / F1                               #
-# ===================================================================== #
+# ---- CORE P / R / F1 ----
 
 
 def _prf(predicted: Set, gold: Set) -> Dict[str, float]:
@@ -60,9 +53,7 @@ def _prf(predicted: Set, gold: Set) -> Dict[str, float]:
     return {"precision": precision, "recall": recall, "f1": f1}
 
 
-# ===================================================================== #
-#              INSTANCE-LEVEL HELPERS (private)                         #
-# ===================================================================== #
+# ---- INSTANCE-LEVEL HELPERS (private) ----
 
 
 def _rel_boundary_instance(
@@ -113,9 +104,7 @@ def _ner_strict_instance(
     }
 
 
-# ===================================================================== #
-#               CORPUS-LEVEL MICRO METRICS (public)                     #
-# ===================================================================== #
+# ---- CORPUS-LEVEL MICRO METRICS (public) ----
 #
 # Each corpus-level function indexes items by ``(instance_idx, *item)``
 # so that identical items in different instances are counted separately.
@@ -244,9 +233,7 @@ def corpus_ner_strict_f1(
     }
 
 
-# ===================================================================== #
-#              CORPUS-LEVEL MACRO METRICS (public)                      #
-# ===================================================================== #
+# ---- CORPUS-LEVEL MACRO METRICS (public) ----
 #
 # Macro: compute per-instance P/R/F1, then average over all instances.
 # ===================================================================== #
@@ -351,9 +338,7 @@ def macro_ner_strict_f1(
     return _macro_average(per, "ner_strict")
 
 
-# ===================================================================== #
-#              TASK-SPECIFIC DISPATCH (Experiment 1)                    #
-# ===================================================================== #
+# ---- TASK-SPECIFIC DISPATCH (Experiment 1) ----
 
 
 def compute_metrics_for_task(
@@ -441,191 +426,3 @@ def compute_metrics_for_task(
         m.update(macro_rel_strict_f1( all_pred_quintuples, all_gold_quintuples))
 
     return m
-
-
-# ===================================================================== #
-#           BACKWARD-COMPATIBLE WRAPPER (pretrain.py / REBEL)           #
-# ===================================================================== #
-#
-# The functions below preserve the original interface used by pretrain.py.
-# New code should prefer compute_metrics_for_task.
-# ===================================================================== #
-
-
-def boundary_f1(
-    predicted_triplets: List[Triplet],
-    gold_triplets:      List[Triplet],
-) -> Dict[str, float]:
-    """Instance-level boundary F1 (old interface)."""
-    raw = _prf(set(predicted_triplets), set(gold_triplets))
-    return {
-        "boundary_precision": raw["precision"],
-        "boundary_recall":    raw["recall"],
-        "boundary_f1":        raw["f1"],
-    }
-
-
-def strict_f1(
-    predicted_quintuples: List[Quintuple],
-    gold_quintuples:      List[Quintuple],
-) -> Dict[str, float]:
-    """Instance-level strict F1 (old interface)."""
-    raw = _prf(set(predicted_quintuples), set(gold_quintuples))
-    return {
-        "strict_precision": raw["precision"],
-        "strict_recall":    raw["recall"],
-        "strict_f1":        raw["f1"],
-    }
-
-
-def ner_boundary_f1(
-    predicted_entities: List[str],
-    gold_entities:      List[str],
-) -> Dict[str, float]:
-    """Instance-level NER boundary F1 (old interface)."""
-    return _ner_boundary_instance(predicted_entities, gold_entities)
-
-
-def ner_typed_f1(
-    predicted_entities: List[EntityMention],
-    gold_entities:      List[EntityMention],
-) -> Dict[str, float]:
-    """Instance-level NER typed F1 (old name; prefer ner_strict_f1)."""
-    raw = _prf(set(predicted_entities), set(gold_entities))
-    return {
-        "ner_typed_precision": raw["precision"],
-        "ner_typed_recall":    raw["recall"],
-        "ner_typed_f1":        raw["f1"],
-    }
-
-
-# Alias with the name used in S2G documentation.
-ner_strict_f1 = ner_typed_f1
-
-
-def corpus_boundary_f1(
-    all_predicted: List[List[Triplet]],
-    all_gold:      List[List[Triplet]],
-) -> Dict[str, float]:
-    """Corpus-level micro boundary F1 (old interface — key: 'boundary_f1').
-
-    Retained for pretrain.py compatibility.  New code should use
-    :func:`corpus_rel_boundary_f1`.
-    """
-    pred_set: Set[Tuple] = set()
-    gold_set: Set[Tuple] = set()
-    for idx, (preds, golds) in enumerate(zip(all_predicted, all_gold)):
-        for t in preds:
-            pred_set.add((idx, t[0], t[1], t[2]))
-        for t in golds:
-            gold_set.add((idx, t[0], t[1], t[2]))
-    raw = _prf(pred_set, gold_set)
-    return {
-        "boundary_precision": raw["precision"],
-        "boundary_recall":    raw["recall"],
-        "boundary_f1":        raw["f1"],
-    }
-
-
-def corpus_strict_f1(
-    all_predicted: List[List[Quintuple]],
-    all_gold:      List[List[Quintuple]],
-) -> Dict[str, float]:
-    """Corpus-level micro strict F1 (old interface — key: 'strict_f1').
-
-    Retained for pretrain.py compatibility.  New code should use
-    :func:`corpus_rel_strict_f1`.
-    """
-    pred_set: Set[Tuple] = set()
-    gold_set: Set[Tuple] = set()
-    for idx, (preds, golds) in enumerate(zip(all_predicted, all_gold)):
-        for q in preds:
-            pred_set.add((idx,) + q)
-        for q in golds:
-            gold_set.add((idx,) + q)
-    raw = _prf(pred_set, gold_set)
-    return {
-        "strict_precision": raw["precision"],
-        "strict_recall":    raw["recall"],
-        "strict_f1":        raw["f1"],
-    }
-
-
-def corpus_ner_f1(
-    all_predicted: List[List],
-    all_gold:      List[List],
-    typed: bool = False,
-) -> Dict[str, float]:
-    """Corpus-level micro NER F1 (old interface).
-
-    Retained for pretrain.py compatibility.  New code should use
-    :func:`corpus_ner_boundary_f1` or :func:`corpus_ner_strict_f1`.
-    """
-    pred_set: Set[Tuple] = set()
-    gold_set: Set[Tuple] = set()
-    for idx, (preds, golds) in enumerate(zip(all_predicted, all_gold)):
-        for e in preds:
-            pred_set.add((idx, e) if not typed else (idx, e[0], e[1]))
-        for e in golds:
-            gold_set.add((idx, e) if not typed else (idx, e[0], e[1]))
-    raw    = _prf(pred_set, gold_set)
-    prefix = "ner_typed" if typed else "ner_boundary"
-    return {
-        f"{prefix}_precision": raw["precision"],
-        f"{prefix}_recall":    raw["recall"],
-        f"{prefix}_f1":        raw["f1"],
-    }
-
-
-def aggregate_batch_metrics(
-    per_instance_metrics: List[Dict[str, float]],
-) -> Dict[str, float]:
-    """Mean of each metric across a batch (old interface)."""
-    if not per_instance_metrics:
-        return {}
-    keys = per_instance_metrics[0].keys()
-    n    = len(per_instance_metrics)
-    return {k: sum(m[k] for m in per_instance_metrics) / n for k in keys}
-
-
-def compute_metrics(
-    all_predicted_triplets:  List[List[Triplet]],
-    all_gold_triplets:       List[List[Triplet]],
-    all_predicted_entities:  Optional[List[List[str]]] = None,
-    all_gold_entities:       Optional[List[List[str]]] = None,
-    mode: str = "boundary",
-) -> Dict[str, float]:
-    """Compute corpus-level metrics — old interface for pretrain.py.
-
-    Args:
-        all_predicted_triplets: Predicted triplet lists per instance.
-        all_gold_triplets:      Gold triplet lists per instance.
-        all_predicted_entities: Predicted entity span lists (for NER).
-        all_gold_entities:      Gold entity span lists.
-        mode:                   ``"boundary"`` (relation boundary F1) or
-                                ``"strict"`` (relation strict + boundary).
-
-    Returns:
-        Metric dict.  In ``"boundary"`` mode the primary key is
-        ``"boundary_f1"``.  In ``"strict"`` mode both ``"strict_f1"``
-        and ``"boundary_f1"`` are returned alongside ``"avg_f1"``.
-    """
-    metrics: Dict[str, float] = {}
-
-    if mode == "boundary":
-        metrics.update(corpus_boundary_f1(all_predicted_triplets, all_gold_triplets))
-
-    elif mode == "strict":
-        metrics.update(corpus_strict_f1(all_predicted_triplets, all_gold_triplets))  # type: ignore[arg-type]
-        boundary_triplets_pred = [[(q[0], q[2], q[3]) for q in inst] for inst in all_predicted_triplets]
-        boundary_triplets_gold = [[(q[0], q[2], q[3]) for q in inst] for inst in all_gold_triplets]
-        metrics.update(corpus_boundary_f1(boundary_triplets_pred, boundary_triplets_gold))
-        metrics["avg_f1"] = (metrics["strict_f1"] + metrics["boundary_f1"]) / 2
-
-    else:
-        raise ValueError(f"Unknown mode {mode!r}. Use 'boundary' or 'strict'.")
-
-    if all_predicted_entities is not None and all_gold_entities is not None:
-        metrics.update(corpus_ner_f1(all_predicted_entities, all_gold_entities))
-
-    return metrics

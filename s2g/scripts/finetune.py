@@ -78,11 +78,9 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
-    # ---- 1. Configuration ----
     cfg = load_config()
     logger.info("Configuration loaded: %s", cfg.config_path)
 
-    # ---- 2. GPU and seed ----
     if cfg.hardware.gpu_ids is not None:
         if int(os.environ.get("WORLD_SIZE", 1)) > 1:
             logger.warning(
@@ -97,7 +95,6 @@ def main() -> None:
     set_seed(cfg.train.seed)
     rng = np.random.default_rng(cfg.train.seed)
 
-    # ---- 3. W&B initialisation ----
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     wandb_run_id: Optional[str] = None
     wandb_resume: Optional[str] = None
@@ -119,7 +116,6 @@ def main() -> None:
             resume=wandb_resume,
         )
 
-    # ---- 4. Data and schema ----
     rel_schema    = load_schema(cfg.data.schema_file)
     entity_schema = load_entity_schema(cfg.data.entity_schema_file)
     logger.info(
@@ -148,7 +144,6 @@ def main() -> None:
         train_eval_dataset = Subset(train_dataset, idxs)
         logger.info("Train-eval subsample: %d instances", len(train_eval_dataset))
 
-    # ---- 5. Model and tokeniser ----
     # Prefer an explicit pre-trained checkpoint; fall back to the backbone.
     start_ckpt = cfg.model.pretrained_checkpoint or cfg.model.name
     logger.info("Loading from %s", start_ckpt)
@@ -164,7 +159,6 @@ def main() -> None:
         "Variant=%s — %d special tokens added.", cfg.model.model_variant, num_added
     )
 
-    # ---- 6. Collator (budget mode) ----
     collator_cfg: Dict[str, Any] = {
         "model_variant":           cfg.model.model_variant,
         "max_source_length":       cfg.tokenization.max_source_length,
@@ -176,7 +170,6 @@ def main() -> None:
     }
     collator = S2GCollator(tokenizer, entity_schema, rel_schema, collator_cfg)
 
-    # ---- 7. Callbacks ----
     callbacks = [
         StepTrackingCallback(collator),
         EarlyStoppingCallback(
@@ -204,10 +197,7 @@ def main() -> None:
         )
     )
 
-    # ---- 8. TrainingArguments ----
-    # Experiment 1 uses cosine schedule; the parent Trainer handles it
     # via lr_scheduler_type="cosine" + warmup_steps in TrainingArguments.
-    # For inverse_sqrt (Experiment 3), set to "constant" so the parent
     # does not build a conflicting scheduler.
     hf_scheduler_type = (
         "constant" if cfg.scheduler.type == "inverse_sqrt"
@@ -274,7 +264,6 @@ def main() -> None:
         label_names=[],
     )
 
-    # ---- 9. Trainer ----
     eval_cfg = {
         "max_source_length": cfg.tokenization.max_source_length,
         "max_target_length": cfg.tokenization.max_target_length,
@@ -298,12 +287,10 @@ def main() -> None:
         callbacks=callbacks,
     )
 
-    # ---- 10. Train ----
     logger.info("Starting fine-tuning on %s...", cfg.data.data_dir)
     trainer.train(resume_from_checkpoint=cfg.checkpoint.resume_from)
     logger.info("Fine-tuning complete.")
 
-    # ---- 11. Save best model ----
     best_dir = output_dir / "best_model"
     trainer.save_model(str(best_dir))
     tokenizer.save_pretrained(str(best_dir))
@@ -312,7 +299,6 @@ def main() -> None:
     )
     logger.info("Best model saved to %s", best_dir)
 
-    # ---- 12. Final evaluation on full validation set ----
     full_val = S2GDataset(
         Path(cfg.data.data_dir) / "val.jsonl",
         seed=cfg.train.seed,

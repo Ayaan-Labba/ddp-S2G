@@ -96,9 +96,7 @@ class S2GModel:
             self.tokenizer, self._tokens
         )
 
-    # ------------------------------------------------------------------ #
-    #  Generation                                                          #
-    # ------------------------------------------------------------------ #
+    # --- Generation ---
 
     def generate(
         self,
@@ -154,9 +152,7 @@ class S2GModel:
 
         return self.model.generate(**gen_kwargs)
 
-    # ------------------------------------------------------------------ #
-    #  Serialisation                                                       #
-    # ------------------------------------------------------------------ #
+    # --- Serialisation ---
 
     def save_pretrained(self, path: Union[str, Path]) -> None:
         """Save model, tokeniser, and variant metadata to *path*."""

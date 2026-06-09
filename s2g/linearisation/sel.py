@@ -64,6 +64,7 @@ transitions to REL_LABEL as normal.
 from __future__ import annotations
 
 import random as _random
+from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .special_tokens import AnyTokens, PIPELINE_TOKENS
@@ -86,9 +87,7 @@ RejectedItem = Dict[str, str]
 Triplet = Tuple[str, str, str]  # (head_text, relation_type, tail_text)
 
 
-# ===================================================================== #
-#                         SEL CONSTRUCTION                              #
-# ===================================================================== #
+# ---- SEL CONSTRUCTION ----
 
 
 def organize_by_entity(
@@ -271,20 +270,16 @@ def build_sel(
 
     parts: List[str] = []
 
-    # ------------------------------------------------------------------ #
-    # Boundary                                                             #
-    # ------------------------------------------------------------------ #
+    # --- Boundary ---
     if task == "boundary":
         for ent in blocks:
             parts.append(f"{tok.ent_start} {ent['text']} {tok.ent_end}")
 
-    # ------------------------------------------------------------------ #
-    # NER                                                                  #
-    # ------------------------------------------------------------------ #
+    # --- NER ---
     elif task == "ner":
         for ent in blocks:
             parts.append(
-                f"{tok.ent_start} {ent['text']} {tok.type_} {ent['type']} {tok.ent_end}"
+                f"{tok.ent_start} {ent['text']} {tok.type_} {ent.get('type') or ''} {tok.ent_end}"
             )
         _append_null_block(
             parts, tok,
@@ -293,9 +288,7 @@ def build_sel(
             random_sel=random_sel,
         )
 
-    # ------------------------------------------------------------------ #
-    # RE                                                                   #
-    # ------------------------------------------------------------------ #
+    # --- RE ---
     elif task == "re":
         for ent in blocks:
             rels = ent["relations"]
@@ -319,9 +312,7 @@ def build_sel(
             random_sel=random_sel,
         )
 
-    # ------------------------------------------------------------------ #
-    # Joint                                                                #
-    # ------------------------------------------------------------------ #
+    # --- Joint ---
     elif task == "joint":
         for ent in blocks:
             rels = list(ent["relations"])
@@ -341,16 +332,14 @@ def build_sel(
             random_sel=random_sel,
         )
 
-    # ------------------------------------------------------------------ #
-    # Joint+                                                               #
-    # ------------------------------------------------------------------ #
+    # --- Joint+ ---
     elif task == "joint+":
         for ent in blocks:
             rels = list(ent["relations"])
             if random_sel:
                 _random.shuffle(rels)
             ent_str = (
-                f"{tok.ent_start} {ent['text']} {tok.type_} {ent['type']}"
+                f"{tok.ent_start} {ent['text']} {tok.type_} {ent.get('type') or ''}"
             )
             for rel in rels:
                 ent_str += (
@@ -368,19 +357,17 @@ def build_sel(
     return " ".join(parts)
 
 
-# ===================================================================== #
-#                           SEL PARSING                                 #
-# ===================================================================== #
+# ---- SEL PARSING ----
 
 
-class _State:
-    """Parser state labels."""
-    IDLE        = "IDLE"
-    ENT_SPAN    = "ENT_SPAN"
-    TYPE_LABEL  = "TYPE_LABEL"
-    REL_LABEL   = "REL_LABEL"
-    TAIL_SPAN   = "TAIL_SPAN"
-    NULL_LABEL  = "NULL_LABEL"
+class _State(Enum):
+    """Parser FSM states."""
+    IDLE        = auto()
+    ENT_SPAN    = auto()
+    TYPE_LABEL  = auto()
+    REL_LABEL   = auto()
+    TAIL_SPAN   = auto()
+    NULL_LABEL  = auto()
 
 
 def parse_sel(
@@ -433,9 +420,7 @@ def parse_sel(
     entities:  List[EntityBlock]  = []
     rejected:  List[RejectedItem] = []
 
-    # ------------------------------------------------------------------ #
-    # Flush helpers                                                        #
-    # ------------------------------------------------------------------ #
+    # --- Flush helpers ---
 
     def flush_tail() -> None:
         """Commit a completed (rel_label, tail_span) pair to current_entity."""
@@ -490,9 +475,7 @@ def parse_sel(
             )
         current_entity = None
 
-    # ------------------------------------------------------------------ #
-    # Main scan                                                            #
-    # ------------------------------------------------------------------ #
+    # --- Main scan ---
 
     for token in tokens:
 
@@ -573,9 +556,7 @@ def parse_sel(
     return deduped, rejected
 
 
-# ===================================================================== #
-#                        TRIPLET EXTRACTION                             #
-# ===================================================================== #
+# ---- TRIPLET EXTRACTION ----
 
 
 def extract_triplets(entities: List[EntityBlock]) -> List[Triplet]:
@@ -597,9 +578,7 @@ def extract_triplets(entities: List[EntityBlock]) -> List[Triplet]:
     return triplets
 
 
-# ===================================================================== #
-#                            HELPERS                                    #
-# ===================================================================== #
+# ---- HELPERS ----
 
 
 def _append_null_block(

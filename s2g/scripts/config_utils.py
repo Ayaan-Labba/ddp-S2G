@@ -11,17 +11,6 @@ dataclasses) and merges three layers in resolution order:
 
 Because the schema is enforced in struct mode, unknown keys raise a clear
 error at load time rather than silently shadowing the real value.
-
-S2G changes from Vanilla S2G
-------------------------------
-- ``ModelConfig``: new ``model_variant`` field (``"pipeline"`` | ``"joint"``).
-- ``DataConfig``: new ``entity_schema_file`` field.
-- ``SSIConfig``: schedule-mode fields removed (budget mode only);
-  ``max_types_in_prompt`` split into ``max_rel_types_in_prompt`` and
-  ``max_ent_types_in_prompt``.
-- ``TypedSELConfig`` removed (not part of Experiment 1 architecture).
-- ``EvaluationConfig.mode`` removed; ``compute_metrics_for_task`` uses the
-  task to select metrics automatically.
 """
 
 from __future__ import annotations
@@ -37,9 +26,7 @@ from omegaconf import DictConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
-# ===================================================================== #
-#                       NESTED CONFIG SCHEMA                             #
-# ===================================================================== #
+# ---- NESTED CONFIG SCHEMA ----
 
 
 @dataclass
@@ -225,9 +212,7 @@ class S2GConfig:
     config_path:  Optional[str]      = None
 
 
-# ===================================================================== #
-#                             LOADER                                     #
-# ===================================================================== #
+# ---- LOADER ----
 
 
 def load_config(
@@ -274,9 +259,7 @@ def load_config(
     return cfg
 
 
-# ===================================================================== #
-#                           SCHEMA LOADERS                              #
-# ===================================================================== #
+# ---- SCHEMA LOADERS ----
 
 
 def load_schema(schema_path: str) -> List[str]:
@@ -311,9 +294,7 @@ def load_entity_schema(entity_schema_file: Optional[str]) -> List[str]:
     return load_schema(entity_schema_file)
 
 
-# ===================================================================== #
-#                       PRIVATE HELPERS                                  #
-# ===================================================================== #
+# ---- PRIVATE HELPERS ----
 
 
 def _extract_config_flag(

@@ -31,6 +31,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -70,9 +71,7 @@ from s2g.scripts.config_utils import (
 logger = logging.getLogger(__name__)
 
 
-# ===================================================================== #
-#                        GENERATION HELPER                              #
-# ===================================================================== #
+# ---- GENERATION HELPER ----
 
 
 def _generate_batch(
@@ -132,7 +131,13 @@ def _generate_batch(
             )
         ]
 
-    with torch.no_grad():
+    param_dtype = next(model.parameters()).dtype
+    autocast_ctx = (
+        torch.autocast(device_type=device.type, dtype=param_dtype)
+        if param_dtype in (torch.bfloat16, torch.float16) and device.type == "cuda"
+        else contextlib.nullcontext()
+    )
+    with torch.inference_mode(), autocast_ctx:
         generated = model.generate(**gen_kwargs)
 
     all_entities: List[List[EntityBlock]] = []
@@ -179,9 +184,7 @@ def _to_entity_data(
     return data
 
 
-# ===================================================================== #
-#                    PIPELINE EVALUATION                                #
-# ===================================================================== #
+# ---- PIPELINE EVALUATION ----
 
 
 def _evaluate_pipeline(
@@ -308,9 +311,7 @@ def _evaluate_pipeline(
     return per_inst, m
 
 
-# ===================================================================== #
-#                      JOINT EVALUATION                                 #
-# ===================================================================== #
+# ---- JOINT EVALUATION ----
 
 
 def _evaluate_joint(
@@ -409,9 +410,7 @@ def _evaluate_joint(
     return per_inst, m
 
 
-# ===================================================================== #
-#                              MAIN                                     #
-# ===================================================================== #
+# ---- MAIN ----
 
 
 def main() -> None:

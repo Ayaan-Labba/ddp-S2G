@@ -39,9 +39,7 @@ from .special_tokens import (
 )
 
 
-# ===================================================================== #
-#                        SSI PREFIX BUILDERS                            #
-# ===================================================================== #
+# ---- SSI PREFIX BUILDERS ----
 
 
 def build_ner_ssi(
@@ -62,11 +60,6 @@ def build_ner_ssi(
     Returns:
         SSI prefix string, e.g.
         ``"<type> city <type> country <type> person"``.
-
-    Example::
-
-        >>> build_ner_ssi(["person", "city", "country"])
-        '<type> city <type> country <type> person'
     """
     types = list(entity_types)
     _random.shuffle(types) if random_order else types.sort()
@@ -91,20 +84,13 @@ def build_rel_ssi(
     Returns:
         SSI prefix string, e.g.
         ``"<rel> located in <rel> place of birth <rel> president of"``.
-
-    Example::
-
-        >>> build_rel_ssi(["president of", "place of birth"])
-        '<rel> place of birth <rel> president of'
     """
     types = list(rel_types)
     _random.shuffle(types) if random_order else types.sort()
     return " ".join(f"{tok.rel} {t}" for t in types)
 
 
-# ===================================================================== #
-#                        TEXT AUGMENTATION                              #
-# ===================================================================== #
+# ---- TEXT AUGMENTATION ----
 
 
 def augment_ner_text(
@@ -130,14 +116,6 @@ def augment_ner_text(
 
     Returns:
         Augmented text string ready for tokenisation.
-
-    Example::
-
-        >>> augment_ner_text(
-        ...     ["Barack", "Obama", "was", "born", "in", "Honolulu"],
-        ...     [(0, 2), (5, 6)],
-        ... )
-        '<ent> Barack Obama </ent> was born in <ent> Honolulu </ent>'
     """
     resolved = _resolve_overlaps(sorted(entity_spans, key=lambda s: s[0]))
     parts: List[str] = []
@@ -173,14 +151,6 @@ def augment_re_text(
 
     Returns:
         Augmented text string ready for tokenisation.
-
-    Example::
-
-        >>> augment_re_text(
-        ...     ["Barack", "Obama", "was", "born", "in", "Honolulu"],
-        ...     [(0, 2, "person"), (5, 6, "city")],
-        ... )
-        '<ent> Barack Obama <type> person </ent> was born in <ent> Honolulu <type> city </ent>'
     """
     data = sorted(entity_data, key=lambda e: e[0])
     resolved = _resolve_overlaps([(s, e) for s, e, _ in data])
@@ -201,9 +171,7 @@ def augment_re_text(
     return " ".join(parts)
 
 
-# ===================================================================== #
-#                     SPAN LOCATING (INFERENCE)                         #
-# ===================================================================== #
+# ---- SPAN LOCATING (INFERENCE) ----
 
 
 def find_token_span(
@@ -227,14 +195,6 @@ def find_token_span(
 
     Returns:
         ``(start, end)`` on success; ``None`` if no match is found.
-
-    Example::
-
-        >>> find_token_span(
-        ...     ["Barack", "Obama", "was", "born"],
-        ...     "Barack Obama",
-        ... )
-        (0, 2)
     """
     span_words = span_text.split()
     n = len(span_words)
@@ -265,14 +225,6 @@ def find_all_token_spans(
     Returns:
         List of ``(start, end)`` half-open intervals in left-to-right
         order.  Returns ``[]`` if *span_text* is empty or not found.
-
-    Example::
-
-        >>> find_all_token_spans(
-        ...     ["Obama", "met", "Obama", "in", "Hawaii"],
-        ...     "Obama",
-        ... )
-        [(0, 1), (2, 3)]
     """
     span_words = span_text.split()
     n = len(span_words)
@@ -289,9 +241,7 @@ def find_all_token_spans(
     return results
 
 
-# ===================================================================== #
-#                     ENCODER INPUT BUILDERS                            #
-# ===================================================================== #
+# ---- ENCODER INPUT BUILDERS ----
 
 
 def build_boundary_encoder_input(
@@ -311,13 +261,6 @@ def build_boundary_encoder_input(
 
     Returns:
         Encoder input string.
-
-    Example::
-
-        >>> build_boundary_encoder_input(
-        ...     "Barack Obama was born in Honolulu"
-        ... )
-        '<bound> Barack Obama was born in Honolulu'
     """
     return f"{tok.bound} {text}"
 
@@ -347,15 +290,6 @@ def build_ner_encoder_input(
 
     Returns:
         Full encoder input string.
-
-    Example::
-
-        >>> build_ner_encoder_input(
-        ...     ["person", "city", "country"],
-        ...     ["Barack", "Obama", "was", "born", "in", "Honolulu"],
-        ...     [(0, 2), (5, 6)],
-        ... )
-        '<type> city <type> country <type> person <ner> <ent> Barack Obama </ent> was born in <ent> Honolulu </ent>'
     """
     ssi = build_ner_ssi(entity_types, random_order=random_order, tok=tok)
     augmented = augment_ner_text(source_tokens, entity_spans, tok=tok)
@@ -386,15 +320,6 @@ def build_re_encoder_input(
 
     Returns:
         Full encoder input string.
-
-    Example::
-
-        >>> build_re_encoder_input(
-        ...     ["place of birth", "president of"],
-        ...     ["Barack", "Obama", "was", "born", "in", "Honolulu"],
-        ...     [(0, 2, "person"), (5, 6, "city")],
-        ... )
-        '<rel> place of birth <rel> president of <re> <ent> Barack Obama <type> person </ent> was born in <ent> Honolulu <type> city </ent>'
     """
     ssi = build_rel_ssi(rel_types, random_order=random_order, tok=tok)
     augmented = augment_re_text(source_tokens, entity_data, tok=tok)
@@ -421,14 +346,6 @@ def build_joint_encoder_input(
 
     Returns:
         Full encoder input string.
-
-    Example::
-
-        >>> build_joint_encoder_input(
-        ...     ["place of birth", "president of"],
-        ...     "Barack Obama was born in Honolulu",
-        ... )
-        '<rel> place of birth <rel> president of <joint> Barack Obama was born in Honolulu'
     """
     ssi = build_rel_ssi(rel_types, random_order=random_order, tok=tok)
     return f"{ssi} {tok.joint} {text}"
@@ -458,15 +375,6 @@ def build_joint_plus_encoder_input(
 
     Returns:
         Full encoder input string.
-
-    Example::
-
-        >>> build_joint_plus_encoder_input(
-        ...     ["person", "city"],
-        ...     ["place of birth", "president of"],
-        ...     "Barack Obama was born in Honolulu",
-        ... )
-        '<type> city <type> person <rel> place of birth <rel> president of <joint+> Barack Obama was born in Honolulu'
     """
     ent_ssi = build_ner_ssi(entity_types, random_order=random_order, tok=tok)
     rel_ssi = build_rel_ssi(rel_types, random_order=random_order, tok=tok)
@@ -475,9 +383,7 @@ def build_joint_plus_encoder_input(
     return f"{prefix} {tok.joint_plus} {text}"
 
 
-# ===================================================================== #
-#                            HELPERS                                    #
-# ===================================================================== #
+# ---- HELPERS ----
 
 
 def _resolve_overlaps(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:

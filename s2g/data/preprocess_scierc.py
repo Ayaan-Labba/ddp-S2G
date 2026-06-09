@@ -81,9 +81,7 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# ===================================================================== #
-#                     SENTENCE-LEVEL CONVERSION                         #
-# ===================================================================== #
+# ---- SENTENCE-LEVEL CONVERSION ----
 
 
 def convert_document(doc: Dict) -> List[Dict]:
@@ -194,9 +192,7 @@ def _convert_sentence(
     }
 
 
-# ===================================================================== #
-#                    DOCUMENT-LEVEL CONVERSION                          #
-# ===================================================================== #
+# ---- DOCUMENT-LEVEL CONVERSION ----
 
 
 def convert_document_level(doc: Dict) -> Optional[Dict]:
@@ -297,9 +293,7 @@ def convert_document_level(doc: Dict) -> Optional[Dict]:
     }
 
 
-# ===================================================================== #
-#                        SPLIT PROCESSING                               #
-# ===================================================================== #
+# ---- SPLIT PROCESSING ----
 
 
 def process_split(
@@ -360,9 +354,7 @@ def process_split(
     return seen_ent, seen_rel
 
 
-# ===================================================================== #
-#                              MAIN                                     #
-# ===================================================================== #
+# ---- MAIN ----
 
 
 def main() -> None:

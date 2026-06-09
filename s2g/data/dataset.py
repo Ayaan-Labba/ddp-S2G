@@ -127,9 +127,7 @@ class S2GDataset(Dataset):
 
         self._file, self._mmap = _open_mmap(self._filepath)
 
-    # ------------------------------------------------------------------ #
-    # Dataset interface                                                    #
-    # ------------------------------------------------------------------ #
+    # --- Dataset interface ---
 
     def __len__(self) -> int:
         return len(self._offsets)
@@ -144,9 +142,7 @@ class S2GDataset(Dataset):
         end   = int(self._offsets[idx, 1])
         return json.loads(self._mmap[start:end])
 
-    # ------------------------------------------------------------------ #
-    # Pickle support (DataLoader spawn mode)                               #
-    # ------------------------------------------------------------------ #
+    # --- Pickle support (DataLoader spawn mode) ---
 
     def __getstate__(self) -> dict:
         """Strip the un-picklable mmap before serialisation."""
@@ -160,9 +156,7 @@ class S2GDataset(Dataset):
         self.__dict__.update(state)
         self._file, self._mmap = _open_mmap(self._filepath)
 
-    # ------------------------------------------------------------------ #
-    # Cleanup                                                              #
-    # ------------------------------------------------------------------ #
+    # --- Cleanup ---
 
     def __del__(self) -> None:
         try:
@@ -172,9 +166,7 @@ class S2GDataset(Dataset):
             pass
 
 
-# ======================================================================= #
-#  Module-level helpers                                                    #
-# ======================================================================= #
+# ---- Module-level helpers ----
 
 
 def _open_mmap(filepath: Path) -> tuple[object, mmap.mmap]:

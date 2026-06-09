@@ -83,9 +83,7 @@ from s2g.linearisation import (
 logger = logging.getLogger(__name__)
 
 
-# ===================================================================== #
-#                                TRIE                                   #
-# ===================================================================== #
+# ---- TRIE ----
 
 
 class Trie:
@@ -145,9 +143,7 @@ class Trie:
         return frozenset(valid) if valid else self.sentinel_ids
 
 
-# ===================================================================== #
-#                        SSI LABEL EXTRACTION                           #
-# ===================================================================== #
+# ---- SSI LABEL EXTRACTION ----
 
 
 def _extract_ssi_labels(
@@ -215,9 +211,7 @@ def _extract_ssi_labels(
     return task, ent_type_seqs, rel_type_seqs
 
 
-# ===================================================================== #
-#                             FSM STATES                                #
-# ===================================================================== #
+# ---- FSM STATES ----
 
 
 class FSMState(Enum):
@@ -240,9 +234,7 @@ class _HypState:
     label_prefix: List[int] = field(default_factory=list)
 
 
-# ===================================================================== #
-#                  CONSTRAINT LOGITS PROCESSOR                          #
-# ===================================================================== #
+# ---- CONSTRAINT LOGITS PROCESSOR ----
 
 
 class ConstraintDecodingProcessor(LogitsProcessor):
@@ -271,7 +263,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         tokens: AnyTokens,
         num_beams: int = 1,
     ) -> None:
-        self.source_ids = source_ids
         self.num_beams  = num_beams
 
         # ---- Resolve token IDs ----
@@ -300,13 +291,38 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         batch_size = source_ids.shape[0]
         self._batch_size = batch_size
 
+        # All structural and delimiter token IDs.  These are already encoded
+        # as task-specific exits in _ent_span_exits; they must NOT also bleed
+        # into _source_copy_next, or a state like ENT_SPAN (NER) could expose
+        # </ent> as a copy-next candidate — allowing the entity block to close
+        # without a type label, violating the NER grammar.
+        self._special_ids: FrozenSet[int] = frozenset(tid.values()) | {
+            self.eos_id, self.pad_id
+        }
+
         # ---- Per-batch-item source token sets (for copy constraint) ----
+        # Pre-filtered: special tokens excluded so only content tokens are
+        # available as span-copy candidates for the empty-prefix case.
         self._source_token_sets: List[FrozenSet[int]] = []
         for b in range(batch_size):
-            src_set = set(source_ids[b].tolist())
-            src_set.discard(self.pad_id)
-            src_set.discard(self.eos_id)
+            src_set = set(source_ids[b].tolist()) - self._special_ids
             self._source_token_sets.append(frozenset(src_set))
+
+        # ---- Pre-computed source lists and position index ----
+        # Avoids repeated tensor→list conversion and O(src_len) linear scans
+        # in _source_copy_next during beam search.  The position index maps
+        # each token ID to the list of positions where it appears in the
+        # source; _source_copy_next uses it to look up only positions where
+        # the last token of the current span prefix appears.
+        self._source_lists: List[List[int]] = []
+        self._token_to_positions: List[Dict[int, List[int]]] = []
+        for b in range(batch_size):
+            src = source_ids[b].tolist()
+            self._source_lists.append(src)
+            pos_map: Dict[int, List[int]] = {}
+            for i, tid in enumerate(src):
+                pos_map.setdefault(tid, []).append(i)
+            self._token_to_positions.append(pos_map)
 
         # ---- Per-batch-item tasks and tries ----
         self._tasks:         List[str]            = []
@@ -369,34 +385,42 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             self._null_tries.append(Trie(null_seqs, sentinel_ids=null_sentinel))
 
         # Per-hypothesis states; initialised lazily on first __call__.
-        self._states: Optional[List[_HypState]] = None
+        self._states:    Optional[List[_HypState]] = None
+        self._disallowed: Optional[torch.Tensor]   = None
 
-    # ------------------------------------------------------------------ #
-    #  Initialisation                                                      #
-    # ------------------------------------------------------------------ #
+    # --- Initialisation ---
 
-    def _init_states(self, total_hypotheses: int) -> None:
+    def _init_states(self, total_hypotheses: int, vocab_size: int, device: torch.device) -> None:
         self._states = [_HypState() for _ in range(total_hypotheses)]
+        # Reusable boolean mask buffer (True = token is blocked).
+        # Allocated once per generate() call; reset via fill_ each step.
+        self._disallowed: torch.Tensor = torch.ones(
+            vocab_size, dtype=torch.bool, device=device
+        )
 
     def _batch_idx(self, hyp_idx: int) -> int:
         """Map flat hypothesis index to the original batch-item index."""
         return hyp_idx // self.num_beams
 
-    # ------------------------------------------------------------------ #
-    #  Source-copy next tokens                                            #
-    # ------------------------------------------------------------------ #
+    # --- Source-copy next tokens ---
 
     def _source_copy_next(
         self,
         batch_idx: int,
         span_tokens: List[int],
     ) -> FrozenSet[int]:
-        """Return tokens that can extend the current span by one position.
+        """Return content tokens that can extend the current span by one position.
 
-        Finds all positions in the source row where *span_tokens* matches
-        and returns the token that follows each match.  When *span_tokens*
-        is empty, any non-padding source token is valid (first token of
-        span).
+        Structural special tokens are excluded from the returned set; they are
+        already encoded as task-specific exits in ``_ent_span_exits`` and must
+        not bleed in via the copy mechanism (e.g. ``</ent>`` following a span
+        in the NER augmented source must not be reachable from ENT_SPAN as a
+        copy candidate — only ``<type>`` is a valid exit for NER).
+
+        When *span_tokens* is empty, any source content token is valid (first
+        token of the span).  When non-empty, finds all positions where
+        *span_tokens* matches in the source and returns the following
+        non-special token at each match.
 
         Args:
             batch_idx:   Index into the original (unexpanded) batch.
@@ -405,21 +429,24 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         if not span_tokens:
             return frozenset(self._source_token_sets[batch_idx])
 
-        src = self.source_ids[batch_idx].tolist()
-        n   = len(span_tokens)
+        src      = self._source_lists[batch_idx]
+        n        = len(span_tokens)
+        last_tid = span_tokens[-1]
+        # Only check positions where the last token of the prefix appears —
+        # avoids an O(src_len) scan on every beam step.
         valid: Set[int] = set()
-
-        for i in range(len(src) - n):
-            if src[i : i + n] == span_tokens:
-                nxt = src[i + n]
-                if nxt not in (self.pad_id, self.eos_id):
-                    valid.add(nxt)
+        for p in self._token_to_positions[batch_idx].get(last_tid, []):
+            start = p - n + 1
+            if start >= 0 and src[start : p + 1] == span_tokens:
+                nxt_pos = p + 1
+                if nxt_pos < len(src):
+                    nxt = src[nxt_pos]
+                    if nxt not in self._special_ids:
+                        valid.add(nxt)
 
         return frozenset(valid)
 
-    # ------------------------------------------------------------------ #
-    #  Task-specific ENT_SPAN exit tokens                                  #
-    # ------------------------------------------------------------------ #
+    # --- Task-specific ENT_SPAN exit tokens ---
 
     def _ent_span_exits(self, task: str) -> FrozenSet[int]:
         """Structural tokens that can immediately follow an entity span.
@@ -442,9 +469,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             return frozenset({self.type_id})
         return frozenset({self.ent_end_id})  # safety fallback
 
-    # ------------------------------------------------------------------ #
-    #  Allowed tokens per state                                            #
-    # ------------------------------------------------------------------ #
+    # --- Allowed tokens per state ---
 
     def _allowed_tokens(self, hyp_idx: int) -> FrozenSet[int]:
         """Compute the set of valid next token IDs for one hypothesis."""
@@ -495,9 +520,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
         return frozenset({self.eos_id})  # unreachable — safety valve
 
-    # ------------------------------------------------------------------ #
-    #  State transition                                                    #
-    # ------------------------------------------------------------------ #
+    # --- State transition ---
 
     def _transition(self, hyp_idx: int, token_id: int) -> None:
         """Update the FSM state for *hyp_idx* after emitting *token_id*."""
@@ -560,9 +583,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         ):
             state.label_prefix.append(token_id)
 
-    # ------------------------------------------------------------------ #
-    #  LogitsProcessor interface                                           #
-    # ------------------------------------------------------------------ #
+    # --- LogitsProcessor interface ---
 
     def __call__(
         self,
@@ -582,7 +603,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         num_hyps = input_ids.shape[0]
 
         if self._states is None:
-            self._init_states(num_hyps)
+            self._init_states(num_hyps, scores.shape[1], scores.device)
 
         seq_len = input_ids.shape[1]
         if seq_len > 1:
@@ -590,21 +611,25 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             for h in range(num_hyps):
                 self._transition(h, last_tokens[h])
 
-        neg_inf = float("-inf")
+        vocab_size = scores.shape[1]
         for h in range(num_hyps):
             allowed = self._allowed_tokens(h)
-            mask    = torch.full_like(scores[h], neg_inf)
-            for tid in allowed:
-                if tid < mask.shape[0]:
-                    mask[tid] = 0.0
-            scores[h] = scores[h] + mask
+            # Reuse pre-allocated bool buffer: fill True (blocked), then unblock
+            # allowed tokens in one vectorized index op, finally masked_fill_.
+            # This avoids a float32 vocab-sized allocation + Python loop per step.
+            self._disallowed.fill_(True)
+            if allowed:
+                valid_ids = [t for t in allowed if t < vocab_size]
+                if valid_ids:
+                    self._disallowed[
+                        torch.tensor(valid_ids, dtype=torch.long, device=scores.device)
+                    ] = False
+            scores[h].masked_fill_(self._disallowed, float("-inf"))
 
         return scores
 
 
-# ===================================================================== #
-#                         BUILDER FUNCTION                              #
-# ===================================================================== #
+# ---- BUILDER FUNCTION ----
 
 
 def build_constraint_processor(

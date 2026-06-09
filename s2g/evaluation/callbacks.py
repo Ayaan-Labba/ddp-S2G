@@ -18,6 +18,7 @@ Training callbacks for the S2G pipeline.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -62,9 +63,7 @@ _TASK_TO_TOK: Dict[str, AnyTokens] = {
 }
 
 
-# ===================================================================== #
-#                     STEP TRACKING CALLBACK                            #
-# ===================================================================== #
+# ---- STEP TRACKING CALLBACK ----
 
 
 class StepTrackingCallback(TrainerCallback):
@@ -92,9 +91,7 @@ class StepTrackingCallback(TrainerCallback):
         self.collator.current_step = state.global_step
 
 
-# ===================================================================== #
-#                  GENERATE TEXT SAMPLES CALLBACK                       #
-# ===================================================================== #
+# ---- GENERATE TEXT SAMPLES CALLBACK ----
 
 
 class GenerateTextSamplesCallback(TrainerCallback):
@@ -202,9 +199,14 @@ class GenerateTextSamplesCallback(TrainerCallback):
         attn_mask   = batch[f"{key}_attention_mask"].to(device)
         labels      = batch[f"{key}_labels"].to(device)
 
-        # ---- Generate predictions (unconstrained) ----
+        param_dtype  = next(model.parameters()).dtype
+        autocast_ctx = (
+            torch.autocast(device_type=device.type, dtype=param_dtype)
+            if param_dtype in (torch.bfloat16, torch.float16) and device.type == "cuda"
+            else contextlib.nullcontext()
+        )
         model.eval()
-        with torch.no_grad():
+        with torch.inference_mode(), autocast_ctx:
             unwrapped = model.module if hasattr(model, "module") else model
             generated_ids = unwrapped.generate(
                 input_ids=input_ids,
@@ -262,9 +264,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         )
 
 
-# ===================================================================== #
-#                  PERIODIC CHECKPOINT CALLBACK                         #
-# ===================================================================== #
+# ---- PERIODIC CHECKPOINT CALLBACK ----
 
 
 class PeriodicCheckpointCallback(TrainerCallback):
@@ -318,9 +318,7 @@ class PeriodicCheckpointCallback(TrainerCallback):
             )
 
 
-# ===================================================================== #
-#                            HELPERS                                    #
-# ===================================================================== #
+# ---- HELPERS ----
 
 
 def _clean_decoded(text: str, tokenizer: PreTrainedTokenizerBase) -> str:

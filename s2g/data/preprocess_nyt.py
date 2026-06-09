@@ -52,9 +52,7 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# ===================================================================== #
-#                        INSTANCE CONVERSION                            #
-# ===================================================================== #
+# ---- INSTANCE CONVERSION ----
 
 
 def convert_instance(raw: Dict) -> Optional[Dict]:
@@ -119,9 +117,7 @@ def convert_instance(raw: Dict) -> Optional[Dict]:
     }
 
 
-# ===================================================================== #
-#                        SPLIT PROCESSING                               #
-# ===================================================================== #
+# ---- SPLIT PROCESSING ----
 
 
 def process_split(
@@ -155,9 +151,7 @@ def process_split(
     return seen_ent_types, seen_rel_types
 
 
-# ===================================================================== #
-#                              MAIN                                     #
-# ===================================================================== #
+# ---- MAIN ----
 
 
 def main() -> None:
