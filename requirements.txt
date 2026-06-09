@@ -1,0 +1,35 @@
+# =============================================================================
+# Sentence-to-Graph (S2G) — Python dependencies
+# =============================================================================
+# Install with:
+#   pip install -r requirements.txt
+#
+# CUDA build wheel (adjust cu132 to match your CUDA version):
+#   --extra-index-url https://download.pytorch.org/whl/cu132
+# =============================================================================
+
+# ---- Core ML ----------------------------------------------------------------
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch>=2.0.0
+transformers>=4.40.0          # 4.40+ for Seq2SeqTrainer fixes + Flan-T5 stability
+accelerate>=1.1.0
+datasets>=3.1.0               # 3.1+ required; removes custom-script loading (REBEL uses Parquet)
+
+# ---- Tokenisation -----------------------------------------------------------
+nltk>=3.8                     # Word tokenisation for entity span alignment
+
+# ---- Configuration ----------------------------------------------------------
+pyyaml>=6.0
+omegaconf>=2.3.0              # Structured config + dotlist CLI overrides
+
+# ---- Experiment tracking ----------------------------------------------------
+wandb>=0.16.0
+
+# ---- Utilities --------------------------------------------------------------
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# ---- Optional: memory-efficient optimiser -----------------------------------
+# Uncomment to use 8-bit AdamW via optim="adamw_bnb_8bit" in TrainingArguments.
+# Required when fine-tuning on a single GPU with limited VRAM.
+# bitsandbytes>=0.43.0
