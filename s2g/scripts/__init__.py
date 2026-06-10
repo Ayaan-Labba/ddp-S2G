@@ -1,3 +1,3 @@
 """
-scripts package — training and evaluation entry points.
+Scripts package — training, evaluation, and inference entry points.
 """

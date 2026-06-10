@@ -1,7 +1,6 @@
 """
-data package — dataset loading and batch collation for S2G fine-tuning.
+Data package — dataset loading and batch collation for S2G fine-tuning.
 """
-
 from .collator import S2GCollator
 from .dataset  import S2GDataset
 

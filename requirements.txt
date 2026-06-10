@@ -9,11 +9,10 @@
 # =============================================================================
 
 # ---- Core ML ----------------------------------------------------------------
---extra-index-url https://download.pytorch.org/whl/cu132
 torch>=2.0.0
 transformers>=4.40.0          # 4.40+ for Seq2SeqTrainer fixes + Flan-T5 stability
 accelerate>=1.1.0
-datasets>=3.1.0               # 3.1+ required; removes custom-script loading (REBEL uses Parquet)
+datasets>=3.1.0               # 3.1+ required; removes custom-script loading
 
 # ---- Tokenisation -----------------------------------------------------------
 nltk>=3.8                     # Word tokenisation for entity span alignment
@@ -29,7 +28,7 @@ wandb>=0.16.0
 numpy>=1.24.0
 tqdm>=4.65.0
 
-# ---- Optional: memory-efficient optimiser -----------------------------------
+# ---- Optional: Memory-efficient optimiser -----------------------------------
 # Uncomment to use 8-bit AdamW via optim="adamw_bnb_8bit" in TrainingArguments.
 # Required when fine-tuning on a single GPU with limited VRAM.
 # bitsandbytes>=0.43.0
