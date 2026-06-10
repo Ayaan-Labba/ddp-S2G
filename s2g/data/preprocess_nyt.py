@@ -51,16 +51,19 @@ def convert_instance(raw: Dict) -> Optional[Dict]:
     if not entities:
         return None
 
-    # 3. Extract Relations and map text mentions back to integer indices
+    # 3. Extract Relations and map text mentions back to fully dereferenced entities
     relations = []
     for raw_rel in raw.get("relationMentions", []):
         head_text = raw_rel.get("em1Text")
         tail_text = raw_rel.get("em2Text")
         
         if head_text in entity_text_to_idx and tail_text in entity_text_to_idx:
+            # Dereference the integer indices to capture the complete entity sub-dictionary
+            head_idx = entity_text_to_idx[head_text]
+            tail_idx = entity_text_to_idx[tail_text]
             relations.append({
-                "head": entity_text_to_idx[head_text],
-                "tail": entity_text_to_idx[tail_text],
+                "head": entities[head_idx],
+                "tail": entities[tail_idx],
                 "type": raw_rel["label"]
             })
 

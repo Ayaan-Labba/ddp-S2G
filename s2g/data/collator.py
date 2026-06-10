@@ -176,11 +176,11 @@ class S2GCollator:
     def _tokenize_task(self, task_key: str, encoder_inputs: List[str], decoder_targets: List[str]) -> Dict[str, Any]:
         model_inputs = self._tokenizer(
             encoder_inputs, max_length=self._cfg["max_source_length"], 
-            truncation=True, padding="max_length", return_tensors="pt"
+            truncation=True, padding="longest", return_tensors="pt"
         )
         label_enc = self._tokenizer(
             decoder_targets, max_length=self._cfg["max_target_length"], 
-            truncation=True, padding="max_length", return_tensors="pt"
+            truncation=True, padding="longest", return_tensors="pt"
         )
         
         label_ids = label_enc["input_ids"].clone()

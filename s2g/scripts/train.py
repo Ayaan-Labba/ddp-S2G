@@ -12,7 +12,6 @@ import numpy as np
 import torch
 import wandb
 from torch.utils.data import Subset
-import torch.multiprocessing
 from transformers import (
     AutoModelForSeq2SeqLM, AutoTokenizer, EarlyStoppingCallback,
     Seq2SeqTrainingArguments, set_seed,
@@ -37,7 +36,6 @@ def main() -> None:
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, cfg.hardware.gpu_ids))
 
     set_seed(cfg.train.seed)
-    torch.backends.cudnn.benchmark = True  # Optimizes performance for fixed tensor shapes
     
     out_dir = Path(cfg.data.output_dir)
     local_rank = int(os.environ.get("LOCAL_RANK", 0))

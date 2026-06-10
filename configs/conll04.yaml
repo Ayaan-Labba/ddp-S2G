@@ -37,7 +37,7 @@ validation:
   percent_check: 1.0
   train_eval_percent_check: 0.25
   batch_size: 4
-  early_stopping_patience: 5
+  early_stopping_patience: 3
   early_stopping_metric: re_rel_strict_f1
 
 generation:
@@ -76,4 +76,4 @@ data:
 hardware:
   num_workers: 4
   persistent_workers: true
-  gpu_ids: [2]
+  gpu_ids: null

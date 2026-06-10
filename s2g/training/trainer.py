@@ -308,7 +308,7 @@ class S2GTrainer(Seq2SeqTrainer):
         ):
             tok_out = self.processing_class(
                 encoder_inputs[i:i + self._eval_bs], max_length=self._max_src, 
-                truncation=True, padding="max_length", return_tensors="pt"
+                truncation=True, padding="longest", return_tensors="pt"
             ).to(self.args.device, non_blocking=True)
 
             with torch.inference_mode(), self._autocast_ctx():
