@@ -13,6 +13,7 @@ import torch.distributed as dist
 from torch.optim.lr_scheduler import LambdaLR
 from transformers import Seq2SeqTrainer
 from transformers.trainer_utils import PredictionOutput
+from tqdm.auto import tqdm
 
 from s2g.evaluation.metrics import compute_metrics_for_task
 from s2g.linearisation import (
@@ -164,9 +165,9 @@ class S2GTrainer(Seq2SeqTrainer):
         local_instances = [dataset[i] for i in range(start_idx, end_idx)]
 
         if self._variant == "pipeline":
-            local_data = self._get_pipeline_predictions(local_instances)
+            local_data = self._get_pipeline_predictions(local_instances, prefix=prefix)
         else:
-            local_data = self._get_joint_predictions(local_instances)
+            local_data = self._get_joint_predictions(local_instances, prefix=prefix)
 
         if world_size > 1:
             gathered_data = [None for _ in range(world_size)]
@@ -236,21 +237,21 @@ class S2GTrainer(Seq2SeqTrainer):
             
         return {}
 
-    def _get_pipeline_predictions(self, instances: List[Dict]) -> Dict[str, List]:
+    def _get_pipeline_predictions(self, instances: List[Dict], prefix: str) -> Dict[str, List]:
         b_inputs = [build_boundary_encoder_input(inst["text"], tok=self._tokens) for inst in instances]
-        b_per_inst = self._run_generation(b_inputs)
+        b_per_inst = self._run_generation(b_inputs, desc=f"({prefix}) Boundary")
 
         n_inputs = [
             build_ner_encoder_input(self._entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, self._tokens) 
             for inst, b in zip(instances, b_per_inst)
         ]
-        n_per_inst = self._run_generation(n_inputs)
+        n_per_inst = self._run_generation(n_inputs, desc=f"({prefix}) NER")
 
         r_inputs, ner_maps = [], []
         for inst, n in zip(instances, n_per_inst):
             r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n), False, self._tokens))
             ner_maps.append({e["text"]: e.get("type", "") for e in n})
-        r_per_inst = self._run_generation(r_inputs)
+        r_per_inst = self._run_generation(r_inputs, desc=f"({prefix}) RE")
 
         return {
             "b_per_inst": b_per_inst,
@@ -263,12 +264,12 @@ class S2GTrainer(Seq2SeqTrainer):
             "g_quints": [[(r["head"]["text"], r["head"].get("type", ""), r["type"], r["tail"]["text"], r["tail"].get("type", "")) for r in inst["relations"]] for inst in instances]
         }
 
-    def _get_joint_predictions(self, instances: List[Dict]) -> Dict[str, List]:
+    def _get_joint_predictions(self, instances: List[Dict], prefix: str) -> Dict[str, List]:
         j_inputs = [build_joint_encoder_input(self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
-        j_per_inst = self._run_generation(j_inputs)
+        j_per_inst = self._run_generation(j_inputs, desc=f"({prefix}) Joint")
 
         jp_inputs = [build_joint_plus_encoder_input(self._entity_schema, self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
-        jp_per_inst = self._run_generation(jp_inputs)
+        jp_per_inst = self._run_generation(jp_inputs, desc=f"({prefix}) Joint+")
 
         return {
             "j_per_inst": j_per_inst,
@@ -287,20 +288,31 @@ class S2GTrainer(Seq2SeqTrainer):
                 return torch.autocast(device_type="cuda", dtype=torch.float16)
         return contextlib.nullcontext()
 
-    def _run_generation(self, encoder_inputs: List[str]) -> List[List[EntityBlock]]:
+    def _run_generation(self, encoder_inputs: List[str], desc: str = "Generating") -> List[List[EntityBlock]]:
         all_entities, raw_model = [], _unwrap_model(self.model)
 
-        for i in range(0, len(encoder_inputs), self._eval_bs):
+        gen_kwargs = {
+            "num_beams": self._eval_beams,
+            "max_length": self._max_tgt,
+        }
+        if self._eval_beams > 1:
+            gen_kwargs["length_penalty"] = 0.0
+            gen_kwargs["early_stopping"] = False
+
+        # tqdm wraps the execution range safely across distributed steps
+        for i in tqdm(
+            range(0, len(encoder_inputs), self._eval_bs),
+            desc=desc,
+            disable=not self.is_world_process_zero(),
+            leave=False
+        ):
             tok_out = self.processing_class(
                 encoder_inputs[i:i + self._eval_bs], max_length=self._max_src, 
-                truncation=True, padding="longest", return_tensors="pt"
+                truncation=True, padding="max_length", return_tensors="pt"
             ).to(self.args.device, non_blocking=True)
 
             with torch.inference_mode(), self._autocast_ctx():
-                generated = raw_model.generate(
-                    **tok_out, num_beams=self._eval_beams, max_length=self._max_tgt, 
-                    length_penalty=0.0, early_stopping=False, no_repeat_ngram_size=0
-                )
+                generated = raw_model.generate(**tok_out, **gen_kwargs)
 
             for text in self.processing_class.batch_decode(generated, skip_special_tokens=False):
                 entities, _ = parse_sel(self._clean_decoded(text), tok=self._tokens)

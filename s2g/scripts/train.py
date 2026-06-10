@@ -25,7 +25,6 @@ from s2g.scripts.config_utils import load_config, load_entity_schema, load_schem
 from s2g.training import S2GTrainer
 
 logger = logging.getLogger(__name__)
-torch.multiprocessing.set_sharing_strategy('file_system')
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -38,6 +37,7 @@ def main() -> None:
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, cfg.hardware.gpu_ids))
 
     set_seed(cfg.train.seed)
+    torch.backends.cudnn.benchmark = True  # Optimizes performance for fixed tensor shapes
     
     out_dir = Path(cfg.data.output_dir)
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
