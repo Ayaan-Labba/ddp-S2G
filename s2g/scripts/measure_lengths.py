@@ -21,9 +21,12 @@ from s2g.scripts.config_utils import load_config, load_entity_schema, load_schem
 
 logger = logging.getLogger(__name__)
 
+_PCTS = (50, 75, 90, 95, 99, 100)
+_PCT_LABELS = tuple("max" if p == 100 else f"p{p}" for p in _PCTS)
+
 
 def _pct_dict(values: List[int]) -> Dict[int, int]:
-    return {p: int(np.percentile(np.array(values, dtype=np.int32), p, method="lower")) for p in (50, 75, 90, 95, 99, 100)}
+    return {p: int(np.percentile(np.array(values, dtype=np.int32), p, method="lower")) for p in _PCTS}
 
 
 def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str]) -> Dict[str, Dict[int, int]]:
@@ -72,26 +75,53 @@ def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_sc
     return {k: _pct_dict(v) for k, v in l.items()}
 
 
+def _print_table(title: str, rows: Dict[str, Dict[int, int]]) -> None:
+    header = "".join(f"{lbl:>8}" for lbl in _PCT_LABELS)
+    sep = "=" * (20 + 8 * len(_PCTS))
+    logger.info(sep)
+    logger.info(title)
+    logger.info("-" * (20 + 8 * len(_PCTS)))
+    logger.info(f"{'task/split':<20}{header}")
+    for name, pcts in rows.items():
+        logger.info(f"{name:<20}" + "".join(f"{pcts[p]:>8d}" for p in _PCTS))
+    logger.info(sep)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     cfg = load_config()
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
-    add_special_tokens_to_tokenizer(tokenizer, PIPELINE_TOKENS if cfg.model.model_variant == "pipeline" else JOINT_TOKENS)
+    variant = cfg.model.model_variant
+    add_special_tokens_to_tokenizer(tokenizer, PIPELINE_TOKENS if variant == "pipeline" else JOINT_TOKENS)
 
     entity_schema, rel_schema = load_entity_schema(cfg.data.entity_schema_file), load_schema(cfg.data.schema_file)
-    scan_fn = _scan_pipeline if cfg.model.model_variant == "pipeline" else _scan_joint
+    scan_fn = _scan_pipeline if variant == "pipeline" else _scan_joint
 
     per_split = {n: scan_fn(S2GDataset(Path(cfg.data.data_dir) / f"{n}.jsonl", seed=cfg.train.seed), tokenizer, entity_schema, rel_schema) 
                  for n in ("train", "val", "test") if (Path(cfg.data.data_dir) / f"{n}.jsonl").exists()}
+
+    if not per_split:
+        raise RuntimeError("No splits scanned; check data.data_dir.")
+
+    for split_name, stats in per_split.items():
+        _print_table(f"Split: {split_name}", stats)
 
     overall = {}
     for stats in per_split.values():
         for task, pcts in stats.items():
             overall[task] = {p: max(overall.get(task, {}).get(p, 0), v) for p, v in pcts.items()}
 
-    logger.info("Suggested Max Source Length: %d", ((overall["re_src" if cfg.model.model_variant == "pipeline" else "joint_plus_src"][99] + 31) // 32) * 32)
-    logger.info("Suggested Max Target Length: %d", ((overall["re_tgt" if cfg.model.model_variant == "pipeline" else "joint_plus_tgt"][99] + 31) // 32) * 32)
+    _print_table("Overall (element-wise max across splits)", overall)
+
+    src_key = "re_src" if variant == "pipeline" else "joint_plus_src"
+    tgt_key = "re_tgt" if variant == "pipeline" else "joint_plus_tgt"
+    p99_src = overall[src_key][99]
+    p99_tgt = overall[tgt_key][99]
+
+    logger.info("Suggested Max Source Length (p99 rounded up to 32): %d", ((p99_src + 31) // 32) * 32)
+    logger.info("Suggested Max Target Length (p99 rounded up to 32): %d", ((p99_tgt + 31) // 32) * 32)
+
 
 if __name__ == "__main__":
     main()
