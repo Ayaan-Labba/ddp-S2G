@@ -76,9 +76,8 @@ class S2GTrainer(Seq2SeqTrainer):
         self._eval_bs = self._eval_cfg["eval_batch_size"]
         self._eval_beams = self._eval_cfg["eval_beams"]
         
-        # EFFICIENCY FIX: Cache special tokens once to avoid overhead in the generation loop
         self._specials_to_remove = [
-            tok for tok in (self.tokenizer.pad_token, self.tokenizer.eos_token, self.tokenizer.bos_token) if tok
+            tok for tok in (self.processing_class.pad_token, self.processing_class.eos_token, self.processing_class.bos_token) if tok
         ]
 
     def _clean_decoded(self, text: str) -> str:
@@ -292,8 +291,7 @@ class S2GTrainer(Seq2SeqTrainer):
         all_entities, raw_model = [], _unwrap_model(self.model)
 
         for i in range(0, len(encoder_inputs), self._eval_bs):
-            # EFFICIENCY FIX: non_blocking=True allows asynchronous host-to-device transfers
-            tok_out = self.tokenizer(
+            tok_out = self.processing_class(
                 encoder_inputs[i:i + self._eval_bs], max_length=self._max_src, 
                 truncation=True, padding="longest", return_tensors="pt"
             ).to(self.args.device, non_blocking=True)
@@ -304,7 +302,7 @@ class S2GTrainer(Seq2SeqTrainer):
                     length_penalty=0.0, early_stopping=False, no_repeat_ngram_size=0
                 )
 
-            for text in self.tokenizer.batch_decode(generated, skip_special_tokens=False):
+            for text in self.processing_class.batch_decode(generated, skip_special_tokens=False):
                 entities, _ = parse_sel(self._clean_decoded(text), tok=self._tokens)
                 all_entities.append(entities)
 

@@ -2,6 +2,7 @@
 s2g_env/
 *__pycache__/
 .vscode/
+submit_train.sh
 
 # Data
 /data/

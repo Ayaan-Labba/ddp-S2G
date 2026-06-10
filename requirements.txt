@@ -4,8 +4,8 @@
 # Install with:
 #   pip install -r requirements.txt
 #
-# CUDA build wheel (adjust cu130 to match your CUDA version):
---extra-index-url https://download.pytorch.org/whl/cu130
+# CUDA build wheel (adjust cu126 to match your CUDA version):
+--extra-index-url https://download.pytorch.org/whl/cu126
 # =============================================================================
 
 # ---- Core ML ----------------------------------------------------------------

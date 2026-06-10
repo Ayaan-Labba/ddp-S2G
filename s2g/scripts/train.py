@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import wandb
 from torch.utils.data import Subset
+import torch.multiprocessing
 from transformers import (
     AutoModelForSeq2SeqLM, AutoTokenizer, EarlyStoppingCallback,
     Seq2SeqTrainingArguments, set_seed,
@@ -24,7 +25,7 @@ from s2g.scripts.config_utils import load_config, load_entity_schema, load_schem
 from s2g.training import S2GTrainer
 
 logger = logging.getLogger(__name__)
-
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -83,7 +84,7 @@ def main() -> None:
             gradient_checkpointing=cfg.train.gradient_checkpointing, 
             gradient_checkpointing_kwargs={"use_reentrant": False}, 
             max_grad_norm=cfg.train.gradient_clip_value, 
-            fp16=(cfg.train.precision == "16"), 
+            fp16=(cfg.train.precision == "fp16"), 
             bf16=(cfg.train.precision == "bf16"), 
             dataloader_num_workers=cfg.hardware.num_workers, 
             dataloader_persistent_workers=cfg.hardware.persistent_workers, 
