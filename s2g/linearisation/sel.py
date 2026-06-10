@@ -85,7 +85,7 @@ def build_sel(
         # Accumulate string components in a list to prevent Python string concatenation overhead
         ent_parts = [tok.ent_start, ent['text']]
         if task in {"ner", "joint+"}:
-            ent_parts.extend([tok.type_, ent.get('type', '')])
+            ent_parts.extend([tok.type_, ent.get('type') or ''])
 
         for rel in rels:
             ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])

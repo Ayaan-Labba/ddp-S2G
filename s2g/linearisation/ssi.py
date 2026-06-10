@@ -4,7 +4,7 @@ SSI construction and text augmentation for the S2G encoder input.
 from __future__ import annotations
 
 import random
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from .special_tokens import (
     AnyTokens, JointTokens, JOINT_TOKENS, PipelineTokens, PIPELINE_TOKENS,
@@ -21,17 +21,22 @@ def build_rel_ssi(rel_types: List[str], random_order: bool = False, tok: AnyToke
     return " ".join(f"{tok.rel} {t}" for t in types)
 
 
-def augment_ner_text(source_tokens: List[str], entity_spans: List[Tuple[int, int]], tok: AnyTokens = PIPELINE_TOKENS) -> str:
-    # Sort primarily by start index
-    spans = sorted(entity_spans, key=lambda s: s[0])
-    parts, cursor, last_end = [], 0, -1
-    
-    for start, end in spans:
-        if start >= last_end:  # Greedily ignore overlaps
+def augment_re_text(source_tokens: List[str], entity_data: List[Tuple[int, int, str]], tok: AnyTokens = PIPELINE_TOKENS) -> str:
+    data = sorted(entity_data, key=lambda e: e[0])
+    accepted: Set[Tuple[int, int]] = set()
+    last_end = -1
+    for start, end, _ in data:
+        if start >= last_end:
+            accepted.add((start, end))
+            last_end = end
+
+    parts, cursor = [], 0
+    for start, end, type_str in data:
+        if (start, end) in accepted:
             parts.extend(source_tokens[cursor:start])
-            parts.extend((tok.ent_start, *source_tokens[start:end], tok.ent_end))
-            cursor, last_end = end, end
-            
+            parts.extend((tok.ent_start, *source_tokens[start:end], tok.type_, type_str, tok.ent_end))
+            cursor = end
+
     parts.extend(source_tokens[cursor:])
     return " ".join(parts)
 

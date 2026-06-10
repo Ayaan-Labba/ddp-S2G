@@ -105,4 +105,7 @@ def _build_offset_index(filepath: Path) -> np.ndarray:
     if not starts:
         return np.empty((0, 2), dtype=np.int64)
         
-    return np.column_stack([np.concatenate(starts), np.concatenate(ends)])
+    starts_arr = np.concatenate(starts)
+    ends_arr   = np.concatenate(ends)
+    keep = ends_arr > starts_arr
+    return np.column_stack([starts_arr[keep], ends_arr[keep]])
