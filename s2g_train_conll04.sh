@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=s2g_train
+#SBATCH --job-name=s2g_train_conll04
 #SBATCH --output=outputs/finetune/conll04/s2g_run_%j.log
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4

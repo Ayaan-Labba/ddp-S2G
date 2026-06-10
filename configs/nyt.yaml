@@ -14,40 +14,41 @@ tokenization:
 optimizer:
   optim: adamw_torch
   lr: 2.0e-5                        # Dropped to 2e-5 exactly per large scale parameters
-  weight_decay: 0.0                 # UIE benchmark baseline defaults to 0
+  weight_decay: 0.01                # UIE benchmark baseline defaults to 0
   adam_beta1: 0.9
   adam_beta2: 0.999
   adam_epsilon: 1.0e-8
 
 scheduler:
   type: cosine
-  warmup_steps: 6700                # Exactly 12% linear warmup across 4 full epochs
+  warmup_steps: 3360                # Exactly 12% linear warmup across 4 full epochs
 
 train:
-  max_steps: 56200                  # 4 full structural validation epochs over ~56k entries
-  batch_size: 4                     # Reconciled to Wadhwa et al. hardware run specs
+  max_steps: 28000                   # 8 full structural validation epochs over ~56k entries
+  batch_size: 16                     # Reconciled to Wadhwa et al. hardware run specs
   gradient_acc_steps: 1
   gradient_clip_value: 1.0
-  gradient_checkpointing: true
-  precision: bf16
+  gradient_checkpointing: True
+  precision: fp32
   seed: 0
 
 validation:
-  check_interval: 2000              
+  check_interval: 1750              
   percent_check: 1.0
-  train_eval_percent_check: 0.01
-  batch_size: 32
+  train_eval_percent_check: 0.09
+  batch_size: 64
   early_stopping_patience: 4
-  early_stopping_metric: re_rel_boundary_f1
+  early_stopping_metric: re_rel_strict_f1
 
 generation:
-  num_beams: 3
+  num_beams: 1
   length_penalty: 0.0
   no_repeat_ngram_size: 0
   early_stopping: false
   constraint_decoding: false
 
 ssi:
+  mode: budget
   max_ent_types_in_prompt: null     
   max_rel_types_in_prompt: null     
   random_prompt: false
@@ -59,12 +60,12 @@ checkpoint:
   resume_from: null
 
 callbacks:
-  sample_generation_interval: 4000
+  sample_generation_interval: 3500
 
 wandb:
   project: s2g
   entity: null
-  run_name: flan-t5-large-nyt-sota
+  run_name: s2g-large-nyt
 
 data:
   data_dir: data/nyt

@@ -67,10 +67,10 @@ wandb:
   run_name: flan-t5-large-scierc-sota
 
 data:
-  data_dir: data/scierc
-  schema_file: data/scierc/relation.schema
-  entity_schema_file: data/scierc/entity.schema
-  output_dir: outputs/finetune/scierc
+  data_dir: data/scierc_doc
+  schema_file: data/scierc_doc/relation.schema
+  entity_schema_file: data/scierc_doc/entity.schema
+  output_dir: outputs/finetune/scierc_doc
 
 hardware:
   num_workers: 4

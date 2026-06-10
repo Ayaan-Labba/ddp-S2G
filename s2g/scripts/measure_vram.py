@@ -88,11 +88,22 @@ def check_train_vram(
     max_tgt: int,
     device: torch.device,
     precision: str = "fp32",
+    gradient_checkpointing: bool = False,
 ) -> Optional[Tuple[float, float]]:
     """
     Runs a full forward + backward at worst-case (max) lengths.
     Returns (peak_allocated_mb, peak_reserved_mb) on success, None on OOM.
+
+    When gradient_checkpointing=True, activations are discarded during the
+    forward pass and recomputed during backward, reducing peak VRAM at the
+    cost of extra compute — matching what the trainer does when
+    gradient_checkpointing is enabled in config.
     """
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    else:
+        model.gradient_checkpointing_disable()
+
     model.train()
     _reset(device)
     batch = _make_train_batch(task_keys, batch_size, max_src, max_tgt, pad_id, device)
@@ -131,6 +142,7 @@ def _populate_optimizer_states(
     max_tgt: int,
     device: torch.device,
     precision: str = "fp32",
+    gradient_checkpointing: bool = False,
 ) -> None:
     """
     Runs one forward → backward → optimizer.step() at batch_size=1, then
@@ -139,7 +151,16 @@ def _populate_optimizer_states(
     This leaves the AdamW moment tensors (~2× model size) resident in VRAM,
     matching the memory footprint present when evaluation fires during real
     training.  Gradients themselves are released by zero_grad(set_to_none=True).
+
+    gradient_checkpointing must match the train config so that the moment
+    tensors are sized correctly (checkpointing affects which layers accumulate
+    gradients and thus the shape of the stored moments).
     """
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    else:
+        model.gradient_checkpointing_disable()
+
     model.train()
     batch = _make_train_batch(task_keys, 1, max_src, max_tgt, pad_id, device)
     autocast_ctx = _get_autocast_ctx(precision, device)
@@ -170,6 +191,7 @@ def binary_search_max_train_batch(
     max_tgt: int,
     device: torch.device,
     precision: str = "fp32",
+    gradient_checkpointing: bool = False,
     search_max: int = 256,
 ) -> Tuple[int, Optional[float], Optional[float]]:
     """
@@ -177,7 +199,7 @@ def binary_search_max_train_batch(
     Returns (max_batch_size, peak_allocated_mb, peak_reserved_mb).
     peak_* are None if even batch_size=1 OOMs.
     """
-    result = check_train_vram(model, pad_id, task_keys, 1, max_src, max_tgt, device, precision)
+    result = check_train_vram(model, pad_id, task_keys, 1, max_src, max_tgt, device, precision, gradient_checkpointing)
     if result is None:
         return 0, None, None
 
@@ -186,7 +208,7 @@ def binary_search_max_train_batch(
 
     while lo <= hi:
         mid = (lo + hi) // 2
-        r = check_train_vram(model, pad_id, task_keys, mid, max_src, max_tgt, device, precision)
+        r = check_train_vram(model, pad_id, task_keys, mid, max_src, max_tgt, device, precision, gradient_checkpointing)
         if r is not None:
             best, best_result = mid, r
             lo = mid + 1
@@ -325,10 +347,12 @@ def main() -> None:
 
     # ── 1. Training VRAM — binary search ─────────────────────────────────────
     logger.info("─" * 60)
-    logger.info("TRAIN CHECK — binary-searching max train batch size (forward+backward, all task heads)")
+    logger.info("TRAIN CHECK — binary-searching max train batch size (forward+backward, all task heads%s)",
+                ", gradient_checkpointing=True" if cfg.train.gradient_checkpointing else "")
 
     max_train_bs, alloc_mb, reserved_mb = binary_search_max_train_batch(
-        model, pad_id, task_keys, max_src, max_tgt, device, precision
+        model, pad_id, task_keys, max_src, max_tgt, device, precision,
+        gradient_checkpointing=cfg.train.gradient_checkpointing,
     )
 
     if max_train_bs == 0:
@@ -361,7 +385,16 @@ def main() -> None:
         eps=cfg.optimizer.adam_epsilon,
         weight_decay=cfg.optimizer.weight_decay,
     )
-    _populate_optimizer_states(model, optimizer, pad_id, task_keys, max_src, max_tgt, device, precision)
+    _populate_optimizer_states(
+        model, optimizer, pad_id, task_keys, max_src, max_tgt, device, precision,
+        gradient_checkpointing=cfg.train.gradient_checkpointing,
+    )
+
+    # gradient_checkpointing_enable() causes transformers to set use_cache=False
+    # on the model config, which persists into eval and disables the KV cache
+    # during generation. Restore both here before the eval binary search.
+    model.gradient_checkpointing_disable()
+    model.config.use_cache = True
 
     baseline_mb = _mb(torch.cuda.memory_allocated(device))
     logger.info(
