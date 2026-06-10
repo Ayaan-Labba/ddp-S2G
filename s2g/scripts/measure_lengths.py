@@ -33,9 +33,9 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
     l: Dict[str, List[int]] = {k: [] for k in ("boundary_src", "ner_src", "re_src", "boundary_tgt", "ner_tgt", "re_tgt")}
     
     for i in tqdm(range(len(dataset)), desc="pipeline", leave=False):
-        inst, ents, toks = dataset[i], dataset[i]["entities"], dataset[i]["tokens"]
+        inst = dataset[i]
+        ents, toks = inst["entities"], inst["tokens"]
         
-        # EFFICIENCY FIX: Resolve sets exactly once before schema loops to prevent O(N*M) creation allocations
         inst_ent_set = set(inst["entity_types"])
         inst_rel_set = set(inst["rel_types"])
         neg_e = [t for t in entity_schema if t not in inst_ent_set]

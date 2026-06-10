@@ -122,6 +122,46 @@ def check_train_vram(
         _reset(device)
 
 
+def _populate_optimizer_states(
+    model: Any,
+    optimizer: torch.optim.Optimizer,
+    pad_id: int,
+    task_keys: Tuple[str, ...],
+    max_src: int,
+    max_tgt: int,
+    device: torch.device,
+    precision: str = "fp32",
+) -> None:
+    """
+    Runs one forward → backward → optimizer.step() at batch_size=1, then
+    zeros gradients WITHOUT calling empty_cache.
+
+    This leaves the AdamW moment tensors (~2× model size) resident in VRAM,
+    matching the memory footprint present when evaluation fires during real
+    training.  Gradients themselves are released by zero_grad(set_to_none=True).
+    """
+    model.train()
+    batch = _make_train_batch(task_keys, 1, max_src, max_tgt, pad_id, device)
+    autocast_ctx = _get_autocast_ctx(precision, device)
+
+    with autocast_ctx:
+        total_loss = None
+        for k in task_keys:
+            out = model(
+                input_ids=batch[f"{k}_input_ids"],
+                attention_mask=batch[f"{k}_attention_mask"],
+                labels=batch[f"{k}_labels"],
+            )
+            total_loss = out.loss if total_loss is None else total_loss + out.loss
+            del out
+        total_loss.backward()
+
+    optimizer.step()
+    # zero_grad without empty_cache — moments stay in VRAM, gradients are freed
+    model.zero_grad(set_to_none=True)
+    torch.cuda.reset_peak_memory_stats(device)
+
+
 def binary_search_max_train_batch(
     model: Any,
     pad_id: int,
@@ -176,7 +216,13 @@ def check_eval_vram_at(
     _reset(device)
     batch = _make_gen_batch(batch_size, max_src, pad_id, device)
 
-    gen_kwargs: Dict[str, Any] = {"num_beams": num_beams, "max_length": max_tgt}
+    gen_kwargs: Dict[str, Any] = {
+        "num_beams": num_beams,
+        "max_new_tokens": max_tgt,
+        "min_new_tokens": max_tgt,   # Forces decoder to run all max_tgt steps;
+                                     # without this, dummy padding inputs cause early EOS
+                                     # and the KV cache never grows to its true peak size.
+    }
     if num_beams > 1:
         gen_kwargs.update({"length_penalty": 0.0, "early_stopping": False})
 
@@ -301,11 +347,29 @@ def main() -> None:
             max_train_bs,
         )
 
-    # ── 2. Eval VRAM — binary search ─────────────────────────────────────────
+    # ── 2. Eval VRAM — binary search with optimizer states resident ───────────
     logger.info("─" * 60)
     logger.info(
-        "EVAL CHECK — binary-searching max eval batch size "
-        "(generate, num_beams=%d, max_tgt=%d)",
+        "EVAL CHECK — populating AdamW optimizer states before search "
+        "to match VRAM footprint present when eval fires during real training"
+    )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg.optimizer.lr,
+        betas=(cfg.optimizer.adam_beta1, cfg.optimizer.adam_beta2),
+        eps=cfg.optimizer.adam_epsilon,
+        weight_decay=cfg.optimizer.weight_decay,
+    )
+    _populate_optimizer_states(model, optimizer, pad_id, task_keys, max_src, max_tgt, device, precision)
+
+    baseline_mb = _mb(torch.cuda.memory_allocated(device))
+    logger.info(
+        "Optimizer states resident — VRAM baseline: %.0f MB | headroom for eval: %.0f MB",
+        baseline_mb, total_vram_mb - baseline_mb,
+    )
+    logger.info(
+        "Binary-searching max eval batch size (generate, num_beams=%d, max_tgt=%d)",
         num_beams, max_tgt,
     )
 

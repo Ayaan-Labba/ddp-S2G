@@ -138,11 +138,12 @@ def load_config(config_path: Optional[str] = None, cli_args: Optional[List[str]]
     _validate_dotlist(remaining)
 
     cfg = OmegaConf.structured(S2GConfig)
-    if yaml_path and (path := Path(yaml_path)).exists():
+    if yaml_path:
+        path = Path(yaml_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+        
         cfg = OmegaConf.merge(cfg, OmegaConf.load(path))
-        logger.info("Loaded config from %s", path)
-    else:
-        logger.warning("No --config path provided; using schema defaults only.")
 
     if remaining:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(remaining))
