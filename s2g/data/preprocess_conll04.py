@@ -9,21 +9,44 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 
-def convert_instance(raw: Dict) -> Optional[Dict]:
+def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dict[str, str]]:
+    if not config_map_path:
+        return {}, {}
+    path = Path(config_map_path)
+    if not path.exists():
+        logger.warning(f"Config map file {config_map_path} not found. Using raw labels.")
+        return {}, {}
+    
+    with open(path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    if not config:
+        return {}, {}
+        
+    entities = config.get("entities", {}) or {}
+    relations = config.get("relations", {}) or {}
+    return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
+
+
+def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Optional[Dict]:
     if not raw.get("entities"): return None
     
     tokens = raw["tokens"]
     entities = [{
         "text": " ".join(tokens[int(e["start"]):int(e["end"])]),
         "offset": [int(e["start"]), int(e["end"])],
-        "type": e["type"]
+        "type": entity_map.get(e["type"], e["type"])
     } for e in raw["entities"]]
 
     relations = [{
-        "head": entities[int(r["head"])], "tail": entities[int(r["tail"])], "type": r["type"]
+        "head": entities[int(r["head"])],
+        "tail": entities[int(r["tail"])],
+        "type": relation_map.get(r["type"], r["type"])
     } for r in raw.get("relations", []) if int(r["head"]) < len(entities) and int(r["tail"]) < len(entities)]
 
     return {
@@ -32,7 +55,10 @@ def convert_instance(raw: Dict) -> Optional[Dict]:
     }
 
 
-def process_split(split_name: str, instances: List[Dict], output_path: Path) -> Tuple[List[str], List[str]]:
+def process_split(
+    split_name: str, instances: List[Dict], output_path: Path,
+    entity_map: Dict[str, str], relation_map: Dict[str, str]
+) -> Tuple[List[str], List[str]]:
     seen_ent: Set[str] = set()
     seen_rel: Set[str] = set()
     skipped, written = 0, 0
@@ -40,7 +66,7 @@ def process_split(split_name: str, instances: List[Dict], output_path: Path) -> 
     with open(output_path, "w", encoding="utf-8") as fout:
         # Iterate directly over the list of instances for this split
         for raw in instances:
-            if inst := convert_instance(raw):
+            if inst := convert_instance(raw, entity_map, relation_map):
                 fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
                 seen_ent.update(inst["entity_types"])
                 seen_rel.update(inst["rel_types"])
@@ -69,11 +95,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Preprocess dataset for S2G fine-tuning.")
     parser.add_argument("--input_file", required=True, help="Path to coll04.json") 
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--config_map", default="configs/data/conll04.yaml", help="Path to the config YAML for label mapping.")
     args = parser.parse_args()
 
     input_file = Path(args.input_file)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    entity_map, relation_map = load_label_maps(args.config_map)
 
     # Load the single JSON file containing all splits
     with open(input_file, encoding="utf-8") as fin:
@@ -86,7 +115,7 @@ def main() -> None:
     
     for split_key, out_name in split_mapping.items():
         if split_key in dataset:
-            e, r = process_split(split_key, dataset[split_key], output_dir / out_name)
+            e, r = process_split(split_key, dataset[split_key], output_dir / out_name, entity_map, relation_map)
             if split_key == "train": 
                 all_ent, all_rel = e, r # Prefer training schema
 

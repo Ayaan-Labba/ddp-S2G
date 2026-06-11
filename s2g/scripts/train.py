@@ -68,7 +68,7 @@ def main() -> None:
         "model_variant": cfg.model.model_variant, "max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length,
         "max_ent_types_in_prompt": cfg.ssi.max_ent_types_in_prompt or len(entity_schema), "max_rel_types_in_prompt": cfg.ssi.max_rel_types_in_prompt or len(rel_schema),
         "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
-        "tasks": tasks,
+        "tasks": tasks, "mode": cfg.ssi.mode, "max_steps": cfg.train.max_steps,
     })
 
     if cfg.model.model_variant == "pipeline":

@@ -347,6 +347,7 @@ class S2GTrainer(Seq2SeqTrainer):
         }
         if self._eval_beams > 1:
             gen_kwargs["length_penalty"] = 0.0
+            gen_kwargs["no_repeat_ngram_size"] = 0
             gen_kwargs["early_stopping"] = False
 
         # tqdm wraps the execution range safely across distributed steps
