@@ -76,7 +76,7 @@ def build_sel(
             random.shuffle(rels)
 
         if task == "boundary":
-            parts.extend([tok.ent_start, ent['text'], tok.ent_end])
+            parts.extend([tok.ent_start, ent['text']])
             continue
 
         if task == "re" and not rels:
@@ -90,7 +90,6 @@ def build_sel(
         for rel in rels:
             ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
 
-        ent_parts.append(tok.ent_end)
         parts.append(" ".join(ent_parts))
 
     if task != "boundary":

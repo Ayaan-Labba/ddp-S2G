@@ -119,7 +119,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             self._tasks.append(task)
             
             self._ent_type_tries.append(
-                Trie(e_seqs, {self.ent_end_id} if task == "ner" else {self.rel_id, self.ent_end_id}) 
+                Trie(e_seqs, self._get_inter_tokens(task) if task == "ner" else ({self.rel_id} | self._get_inter_tokens(task)))
                 if task in {"ner", "joint+"} else None
             )
             self._rel_tries.append(Trie(r_seqs, {self.tail_id}) if task in {"re", "joint", "joint+"} else None)
@@ -151,11 +151,21 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             and p + 1 < len(src) and src[p + 1] not in self._special_ids
         )
 
+    def _get_inter_tokens(self, task: str) -> Set[int]:
+        if task == "boundary":
+            return {self.ent_start_id, self.eos_id}
+        return {self.ent_start_id, self.null_id, self.eos_id}
+
     def _ent_span_exits(self, task: str) -> FrozenSet[int]:
-        return frozenset({{
-            "ner": self.type_id, "re": self.rel_id, 
-            "joint": self.rel_id, "joint+": self.type_id
-        }.get(task, self.ent_end_id)} | ({self.ent_end_id} if task == "joint" else set()))
+        if task == "boundary":
+            return frozenset(self._get_inter_tokens(task))
+        if task == "joint":
+            return frozenset({self.rel_id} | self._get_inter_tokens(task))
+        if task in {"ner", "joint+"}:
+            return frozenset({self.type_id})
+        if task == "re":
+            return frozenset({self.rel_id})
+        return frozenset()
 
     def _transition(self, state: _HypState, token_id: int) -> None:
         if token_id == self.eos_id: 
@@ -191,10 +201,10 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             return frozenset(self._source_copy_next(b_idx, state.span_tokens) | self._ent_span_exits(task)) or frozenset({self.eos_id})
             
         if state.fsm_state == FSMState.TAIL_SPAN: 
-            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.rel_id, self.ent_end_id}) or frozenset({self.eos_id})
+            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.rel_id} | self._get_inter_tokens(task)) or frozenset({self.eos_id})
             
         if state.fsm_state == FSMState.TYPE_LABEL: 
-            return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset({self.ent_end_id, self.eos_id})
+            return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(self._get_inter_tokens(task))
             
         if state.fsm_state == FSMState.REL_LABEL: 
             return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
