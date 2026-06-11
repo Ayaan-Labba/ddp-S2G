@@ -19,6 +19,7 @@ class ModelConfig:
     name: str = "google/flan-t5-base"
     pretrained_checkpoint: Optional[str] = None
     model_variant: str = "pipeline"
+    tasks: Optional[List[str]] = None
 
 @dataclass
 class TokenizationConfig:

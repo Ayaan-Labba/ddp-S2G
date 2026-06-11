@@ -38,10 +38,10 @@ def _to_spans(source_tokens: List[str], entities: List[EntityBlock]) -> List[Tup
     return list(dict.fromkeys(span for ent in entities for span in find_all_token_spans(source_tokens, ent["text"])))
 
 
-def _to_entity_data(source_tokens: List[str], entities: List[EntityBlock]) -> List[Tuple[int, int, str]]:
+def _to_entity_data(source_tokens: List[str], entities: List[EntityBlock], use_type: bool = True) -> List[Tuple[int, int, str]]:
     return list(dict.fromkeys(
-        (*span, ent["type"]) 
-        for ent in entities if ent.get("type") 
+        (*span, ent["type"] if (use_type and ent.get("type")) else "") 
+        for ent in entities if (not use_type or ent.get("type")) 
         for span in find_all_token_spans(source_tokens, ent["text"])
     ))
 
@@ -70,6 +70,12 @@ class S2GTrainer(Seq2SeqTrainer):
         self._eval_cfg = kwargs.pop("eval_cfg")
         self._train_eval_dataset = kwargs.pop("train_eval_dataset", None)
         self._scheduler_type = kwargs.pop("scheduler_type", "inverse_sqrt")
+        
+        self._tasks = kwargs.pop("tasks", None)
+        if self._tasks is None:
+            self._tasks = ["ner", "re"] if self._variant == "pipeline" else ["joint", "joint+"]
+        else:
+            self._tasks = list(self._tasks)
 
         super().__init__(**kwargs)
         self._max_src = self._eval_cfg["max_source_length"]
@@ -189,69 +195,102 @@ class S2GTrainer(Seq2SeqTrainer):
                 g_trips, g_quints = all_data["g_trips"], all_data["g_quints"]
                 ner_maps = all_data["ner_maps"]
 
-                m.update({f"boundary_{k}": v for k, v in compute_metrics_for_task(
-                    "boundary", 
-                    all_pred_entities=[[e["text"] for e in b] for b in b_per_inst], 
-                    all_gold_entities=g_ents
-                ).items()})
+                if "boundary" in self._tasks:
+                    m.update({f"boundary_{k}": v for k, v in compute_metrics_for_task(
+                        "boundary", 
+                        all_pred_entities=[[e["text"] for e in b] for b in b_per_inst], 
+                        all_gold_entities=g_ents
+                    ).items()})
                 
-                m.update({f"ner_{k}": v for k, v in compute_metrics_for_task(
-                    "ner", 
-                    all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], 
-                    all_gold_entities=g_ents, 
-                    all_pred_entity_mentions=[[(e["text"], e.get("type", "")) for e in n if e.get("type")] for n in n_per_inst], 
-                    all_gold_entity_mentions=g_mentions
-                ).items()})
+                if "ner" in self._tasks:
+                    m.update({f"ner_{k}": v for k, v in compute_metrics_for_task(
+                        "ner", 
+                        all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], 
+                        all_gold_entities=g_ents, 
+                        all_pred_entity_mentions=[[(e["text"], e.get("type", "")) for e in n if e.get("type")] for n in n_per_inst], 
+                        all_gold_entity_mentions=g_mentions
+                    ).items()})
                 
-                m.update({f"re_{k}": v for k, v in compute_metrics_for_task(
-                    "re", 
-                    all_pred_triplets=[extract_triplets(r) for r in r_per_inst], 
-                    all_gold_triplets=g_trips, 
-                    all_pred_quintuples=[_assemble_re_quintuples(r, nm) for r, nm in zip(r_per_inst, ner_maps)], 
-                    all_gold_quintuples=g_quints
-                ).items()})
+                if "re" in self._tasks:
+                    m.update({f"re_{k}": v for k, v in compute_metrics_for_task(
+                        "re", 
+                        all_pred_triplets=[extract_triplets(r) for r in r_per_inst], 
+                        all_gold_triplets=g_trips, 
+                        all_pred_quintuples=[_assemble_re_quintuples(r, nm) for r, nm in zip(r_per_inst, ner_maps)], 
+                        all_gold_quintuples=g_quints
+                    ).items()})
             else:
                 j_per_inst, jp_per_inst = all_data["j_per_inst"], all_data["jp_per_inst"]
                 g_ents, g_mentions = all_data["g_ents"], all_data["g_mentions"]
                 g_trips, g_quints = all_data["g_trips"], all_data["g_quints"]
 
-                m.update({f"joint_{k}": v for k, v in compute_metrics_for_task(
-                    "joint", 
-                    all_pred_triplets=[extract_triplets(j) for j in j_per_inst], 
-                    all_gold_triplets=g_trips
-                ).items()})
+                if "joint" in self._tasks:
+                    m.update({f"joint_{k}": v for k, v in compute_metrics_for_task(
+                        "joint", 
+                        all_pred_triplets=[extract_triplets(j) for j in j_per_inst], 
+                        all_gold_triplets=g_trips
+                    ).items()})
                 
-                m.update({f"joint_plus_{k}": v for k, v in compute_metrics_for_task(
-                    "joint+", 
-                    all_pred_triplets=[extract_triplets(jp) for jp in jp_per_inst], 
-                    all_gold_triplets=g_trips, 
-                    all_pred_quintuples=[_assemble_joint_plus_quintuples(jp) for jp in jp_per_inst], 
-                    all_gold_quintuples=g_quints, 
-                    all_pred_entities=[[e["text"] for e in jp] for jp in jp_per_inst], 
-                    all_gold_entities=g_ents, 
-                    all_pred_entity_mentions=[[(e["text"], e.get("type", "")) for e in jp if e.get("type")] for jp in jp_per_inst], 
-                    all_gold_entity_mentions=g_mentions
-                ).items()})
+                if "joint+" in self._tasks:
+                    m.update({f"joint_plus_{k}": v for k, v in compute_metrics_for_task(
+                        "joint+", 
+                        all_pred_triplets=[extract_triplets(jp) for jp in jp_per_inst], 
+                        all_gold_triplets=g_trips, 
+                        all_pred_quintuples=[_assemble_joint_plus_quintuples(jp) for jp in jp_per_inst], 
+                        all_gold_quintuples=g_quints, 
+                        all_pred_entities=[[e["text"] for e in jp] for jp in jp_per_inst], 
+                        all_gold_entities=g_ents, 
+                        all_pred_entity_mentions=[[(e["text"], e.get("type", "")) for e in jp if e.get("type")] for jp in jp_per_inst], 
+                        all_gold_entity_mentions=g_mentions
+                    ).items()})
             
             return {f"{prefix}_{k}": v for k, v in m.items()}
             
         return {}
 
     def _get_pipeline_predictions(self, instances: List[Dict], prefix: str) -> Dict[str, List]:
-        b_inputs = [build_boundary_encoder_input(inst["text"], tok=self._tokens) for inst in instances]
-        b_per_inst = self._run_generation(b_inputs, desc=f"({prefix}) Boundary")
+        use_boundary = "boundary" in self._tasks
+        use_ner = "ner" in self._tasks
+        use_re = "re" in self._tasks
 
-        n_inputs = [
-            build_ner_encoder_input(self._entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, self._tokens) 
-            for inst, b in zip(instances, b_per_inst)
-        ]
-        n_per_inst = self._run_generation(n_inputs, desc=f"({prefix}) NER")
+        b_per_inst = []
+        if use_boundary:
+            b_inputs = [build_boundary_encoder_input(inst["text"], tok=self._tokens) for inst in instances]
+            b_per_inst = self._run_generation(b_inputs, desc=f"({prefix}) Boundary")
+        else:
+            b_per_inst = [[] for _ in instances]
 
-        r_inputs, ner_maps = [], []
-        for inst, n in zip(instances, n_per_inst):
-            r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n), False, self._tokens))
-            ner_maps.append({e["text"]: e.get("type", "") for e in n})
-        r_per_inst = self._run_generation(r_inputs, desc=f"({prefix}) RE")
+        n_per_inst = []
+        if use_ner:
+            if use_boundary:
+                n_inputs = [
+                    build_ner_encoder_input(self._entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, self._tokens) 
+                    for inst, b in zip(instances, b_per_inst)
+                ]
+            else:
+                n_inputs = [
+                    build_ner_encoder_input(self._entity_schema, inst["tokens"], [], False, self._tokens) 
+                    for inst in instances
+                ]
+            n_per_inst = self._run_generation(n_inputs, desc=f"({prefix}) NER")
+        else:
+            n_per_inst = [[] for _ in instances]
+
+        r_per_inst = []
+        ner_maps = []
+        if use_re:
+            r_inputs = []
+            for inst, b, n in zip(instances, b_per_inst, n_per_inst):
+                if use_ner:
+                    r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, self._tokens))
+                    ner_maps.append({e["text"]: e.get("type", "") for e in n})
+                else:
+                    r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, self._tokens))
+                    ner_maps.append({e["text"]: "" for e in b})
+            r_per_inst = self._run_generation(r_inputs, desc=f"({prefix}) RE")
+        else:
+            r_per_inst = [[] for _ in instances]
+            ner_maps = [{} for _ in instances]
 
         return {
             "b_per_inst": b_per_inst,
@@ -261,15 +300,26 @@ class S2GTrainer(Seq2SeqTrainer):
             "g_ents": [[e["text"] for e in inst["entities"]] for inst in instances],
             "g_mentions": [[(e["text"], e.get("type", "")) for e in inst["entities"]] for inst in instances],
             "g_trips": [[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances],
-            "g_quints": [[(r["head"]["text"], r["head"].get("type", ""), r["type"], r["tail"]["text"], r["tail"].get("type", "")) for r in inst["relations"]] for inst in instances]
+            "g_quints": [[(r["head"]["text"], r["head"].get("type", "") if use_ner else "", r["type"], r["tail"]["text"], r["tail"].get("type", "") if use_ner else "") for r in inst["relations"]] for inst in instances]
         }
 
     def _get_joint_predictions(self, instances: List[Dict], prefix: str) -> Dict[str, List]:
-        j_inputs = [build_joint_encoder_input(self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
-        j_per_inst = self._run_generation(j_inputs, desc=f"({prefix}) Joint")
+        use_joint = "joint" in self._tasks
+        use_joint_plus = "joint+" in self._tasks
 
-        jp_inputs = [build_joint_plus_encoder_input(self._entity_schema, self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
-        jp_per_inst = self._run_generation(jp_inputs, desc=f"({prefix}) Joint+")
+        j_per_inst = []
+        if use_joint:
+            j_inputs = [build_joint_encoder_input(self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
+            j_per_inst = self._run_generation(j_inputs, desc=f"({prefix}) Joint")
+        else:
+            j_per_inst = [[] for _ in instances]
+
+        jp_per_inst = []
+        if use_joint_plus:
+            jp_inputs = [build_joint_plus_encoder_input(self._entity_schema, self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
+            jp_per_inst = self._run_generation(jp_inputs, desc=f"({prefix}) Joint+")
+        else:
+            jp_per_inst = [[] for _ in instances]
 
         return {
             "j_per_inst": j_per_inst,

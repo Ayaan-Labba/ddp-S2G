@@ -29,8 +29,13 @@ def _pct_dict(values: List[int]) -> Dict[int, int]:
     return {p: int(np.percentile(np.array(values, dtype=np.int32), p, method="lower")) for p in _PCTS}
 
 
-def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str]) -> Dict[str, Dict[int, int]]:
-    l: Dict[str, List[int]] = {k: [] for k in ("boundary_src", "ner_src", "re_src", "boundary_tgt", "ner_tgt", "re_tgt")}
+def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str]) -> Dict[str, Dict[int, int]]:
+    use_boundary = "boundary" in tasks
+    use_ner = "ner" in tasks
+    use_re = "re" in tasks
+
+    src_lengths = {t: [] for t in tasks}
+    tgt_lengths = {t: [] for t in tasks}
     
     for i in tqdm(range(len(dataset)), desc="pipeline", leave=False):
         inst = dataset[i]
@@ -43,23 +48,37 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
         
         blocks = organize_by_entity(ents, inst["relations"])
 
-        l["boundary_src"].append(len(tokenizer.encode(build_boundary_encoder_input(inst["text"], tok=PIPELINE_TOKENS), add_special_tokens=True)))
-        l["ner_src"].append(len(tokenizer.encode(build_ner_encoder_input(entity_schema, toks, [(int(e["offset"][0]), int(e["offset"][1])) for e in ents], tok=PIPELINE_TOKENS), add_special_tokens=True)))
-        l["re_src"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in ents], tok=PIPELINE_TOKENS), add_special_tokens=True)))
-        l["boundary_tgt"].append(len(tokenizer.encode(build_sel(blocks, "boundary", PIPELINE_TOKENS), add_special_tokens=True)))
-        l["ner_tgt"].append(len(tokenizer.encode(build_sel(blocks, "ner", PIPELINE_TOKENS, rejected_ent_types=neg_e), add_special_tokens=True)))
-        l["re_tgt"].append(len(tokenizer.encode(build_sel(blocks, "re", PIPELINE_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
+        if use_boundary:
+            src_lengths["boundary"].append(len(tokenizer.encode(build_boundary_encoder_input(inst["text"], tok=PIPELINE_TOKENS), add_special_tokens=True)))
+            tgt_lengths["boundary"].append(len(tokenizer.encode(build_sel(blocks, "boundary", PIPELINE_TOKENS), add_special_tokens=True)))
 
-    return {k: _pct_dict(v) for k, v in l.items()}
+        if use_ner:
+            spans = [(int(e["offset"][0]), int(e["offset"][1])) for e in ents] if use_boundary else []
+            src_lengths["ner"].append(len(tokenizer.encode(build_ner_encoder_input(entity_schema, toks, spans, tok=PIPELINE_TOKENS), add_special_tokens=True)))
+            tgt_lengths["ner"].append(len(tokenizer.encode(build_sel(blocks, "ner", PIPELINE_TOKENS, rejected_ent_types=neg_e), add_special_tokens=True)))
+
+        if use_re:
+            data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"] if use_ner else "") for e in ents]
+            src_lengths["re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=PIPELINE_TOKENS), add_special_tokens=True)))
+            tgt_lengths["re"].append(len(tokenizer.encode(build_sel(blocks, "re", PIPELINE_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
+
+    res = {}
+    for t in tasks:
+        res[f"{t}_src"] = _pct_dict(src_lengths[t])
+        res[f"{t}_tgt"] = _pct_dict(tgt_lengths[t])
+    return res
 
 
-def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str]) -> Dict[str, Dict[int, int]]:
-    l: Dict[str, List[int]] = {k: [] for k in ("joint_src", "joint_plus_src", "joint_tgt", "joint_plus_tgt")}
+def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str]) -> Dict[str, Dict[int, int]]:
+    use_joint = "joint" in tasks
+    use_joint_plus = "joint+" in tasks
+
+    src_lengths = {t: [] for t in tasks}
+    tgt_lengths = {t: [] for t in tasks}
 
     for i in tqdm(range(len(dataset)), desc="joint", leave=False):
         inst = dataset[i]
         
-        # EFFICIENCY FIX: Resolve sets exactly once before loops
         inst_ent_set = set(inst["entity_types"])
         inst_rel_set = set(inst["rel_types"])
         neg_e = [t for t in entity_schema if t not in inst_ent_set]
@@ -67,12 +86,19 @@ def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_sc
         
         blocks = organize_by_entity(inst["entities"], inst["relations"])
 
-        l["joint_src"].append(len(tokenizer.encode(build_joint_encoder_input(rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
-        l["joint_plus_src"].append(len(tokenizer.encode(build_joint_plus_encoder_input(entity_schema, rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
-        l["joint_tgt"].append(len(tokenizer.encode(build_sel(blocks, "joint", JOINT_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
-        l["joint_plus_tgt"].append(len(tokenizer.encode(build_sel(blocks, "joint+", JOINT_TOKENS, rejected_ent_types=neg_e, rejected_rel_types=neg_r), add_special_tokens=True)))
+        if use_joint:
+            src_lengths["joint"].append(len(tokenizer.encode(build_joint_encoder_input(rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
+            tgt_lengths["joint"].append(len(tokenizer.encode(build_sel(blocks, "joint", JOINT_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
 
-    return {k: _pct_dict(v) for k, v in l.items()}
+        if use_joint_plus:
+            src_lengths["joint+"].append(len(tokenizer.encode(build_joint_plus_encoder_input(entity_schema, rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
+            tgt_lengths["joint+"].append(len(tokenizer.encode(build_sel(blocks, "joint+", JOINT_TOKENS, rejected_ent_types=neg_e, rejected_rel_types=neg_r), add_special_tokens=True)))
+
+    res = {}
+    for t in tasks:
+        res[f"{t}_src"] = _pct_dict(src_lengths[t])
+        res[f"{t}_tgt"] = _pct_dict(tgt_lengths[t])
+    return res
 
 
 def _print_table(title: str, rows: Dict[str, Dict[int, int]]) -> None:
@@ -96,8 +122,14 @@ def main() -> None:
     add_special_tokens_to_tokenizer(tokenizer, PIPELINE_TOKENS if variant == "pipeline" else JOINT_TOKENS)
 
     entity_schema, rel_schema = load_entity_schema(cfg.data.entity_schema_file), load_schema(cfg.data.schema_file)
-    scan_fn = _scan_pipeline if variant == "pipeline" else _scan_joint
+    
+    tasks = cfg.model.tasks
+    if tasks is None:
+        tasks = ["ner", "re"] if variant == "pipeline" else ["joint", "joint+"]
+    else:
+        tasks = list(tasks)
 
+    scan_fn = lambda d, tok, es, rs: (_scan_pipeline(d, tok, es, rs, tasks) if variant == "pipeline" else _scan_joint(d, tok, es, rs, tasks))
     per_split = {n: scan_fn(S2GDataset(Path(cfg.data.data_dir) / f"{n}.jsonl", seed=cfg.train.seed), tokenizer, entity_schema, rel_schema) 
                  for n in ("train", "val", "test") if (Path(cfg.data.data_dir) / f"{n}.jsonl").exists()}
 
@@ -114,8 +146,8 @@ def main() -> None:
 
     _print_table("Overall (element-wise max across splits)", overall)
 
-    src_key = "re_src" if variant == "pipeline" else "joint_plus_src"
-    tgt_key = "re_tgt" if variant == "pipeline" else "joint_plus_tgt"
+    src_key = f"{tasks[-1]}_src"
+    tgt_key = f"{tasks[-1]}_tgt"
     p99_src = overall[src_key][99]
     p99_tgt = overall[tgt_key][99]
 

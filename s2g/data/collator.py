@@ -39,6 +39,21 @@ class S2GCollator:
         self._random_sel = config.get("random_sel", False)
         self._step = 0
 
+        self._tasks = config.get("tasks")
+        if self._tasks is None:
+            self._tasks = ["ner", "re"] if self._variant == "pipeline" else ["joint", "joint+"]
+        else:
+            self._tasks = list(self._tasks)
+
+        task_to_key = {
+            "boundary": "boundary",
+            "ner": "ner",
+            "re": "re",
+            "joint": "joint",
+            "joint+": "joint_plus"
+        }
+        self._task_keys = [task_to_key.get(t, t) for t in self._tasks]
+
     @property
     def current_step(self) -> int: 
         return self._step
@@ -51,26 +66,28 @@ class S2GCollator:
         return self._collate_pipeline(batch) if self._variant == "pipeline" else self._collate_joint(batch)
 
     def _collate_pipeline(self, batch: List[Dict]) -> Dict[str, Any]:
-        tasks = {"boundary": ([], []), "ner": ([], []), "re": ([], [])}
+        tasks = {tk: ([], []) for tk in self._task_keys}
         for inst in batch:
             blocks = organize_by_entity(inst["entities"], inst["relations"])
-            for task, func in [("boundary", self._prepare_boundary), ("ner", self._prepare_ner), ("re", self._prepare_re)]:
+            for tk in self._task_keys:
+                func = getattr(self, f"_prepare_{tk}")
                 enc, dec = func(inst, blocks)
-                tasks[task][0].append(enc)
-                tasks[task][1].append(dec)
+                tasks[tk][0].append(enc)
+                tasks[tk][1].append(dec)
                 
-        return {k: v for t, (enc, dec) in tasks.items() for k, v in self._tokenize_task(t, enc, dec).items()}
+        return {k: v for tk, (enc, dec) in tasks.items() for k, v in self._tokenize_task(tk, enc, dec).items()}
 
     def _collate_joint(self, batch: List[Dict]) -> Dict[str, Any]:
-        tasks = {"joint": ([], []), "joint_plus": ([], [])}
+        tasks = {tk: ([], []) for tk in self._task_keys}
         for inst in batch:
             blocks = organize_by_entity(inst["entities"], inst["relations"])
-            for task, func in [("joint", self._prepare_joint), ("joint_plus", self._prepare_joint_plus)]:
+            for tk in self._task_keys:
+                func = getattr(self, f"_prepare_{tk}")
                 enc, dec = func(inst, blocks)
-                tasks[task][0].append(enc)
-                tasks[task][1].append(dec)
+                tasks[tk][0].append(enc)
+                tasks[tk][1].append(dec)
                 
-        return {k: v for t, (enc, dec) in tasks.items() for k, v in self._tokenize_task(t, enc, dec).items()}
+        return {k: v for tk, (enc, dec) in tasks.items() for k, v in self._tokenize_task(tk, enc, dec).items()}
 
     def _prepare_boundary(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         return (
@@ -82,7 +99,7 @@ class S2GCollator:
         pos_ent, neg_ent = self._sample_types(
             inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
         )
-        spans = [(int(e["offset"][0]), int(e["offset"][1])) for e in inst["entities"]]
+        spans = [(int(e["offset"][0]), int(e["offset"][1])) for e in inst["entities"]] if "boundary" in self._tasks else []
         enc = build_ner_encoder_input(
             pos_ent + neg_ent, inst["tokens"], spans, random_order=self._random_prompt, tok=self._tok
         )
@@ -95,7 +112,8 @@ class S2GCollator:
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
-        data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in inst["entities"]]
+        use_ner = "ner" in self._tasks
+        data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"] if use_ner else "") for e in inst["entities"]]
         enc = build_re_encoder_input(
             pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok
         )

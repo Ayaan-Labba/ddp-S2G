@@ -58,20 +58,46 @@ def main() -> None:
     tokens = PIPELINE_TOKENS if cfg.model.model_variant == "pipeline" else JOINT_TOKENS
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
 
+    tasks = cfg.model.tasks
+    if tasks is None:
+        tasks = ["ner", "re"] if cfg.model.model_variant == "pipeline" else ["joint", "joint+"]
+    else:
+        tasks = list(tasks)
+
     collator = S2GCollator(tokenizer, entity_schema, rel_schema, {
         "model_variant": cfg.model.model_variant, "max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length,
         "max_ent_types_in_prompt": cfg.ssi.max_ent_types_in_prompt or len(entity_schema), "max_rel_types_in_prompt": cfg.ssi.max_rel_types_in_prompt or len(rel_schema),
         "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
+        "tasks": tasks,
     })
+
+    if cfg.model.model_variant == "pipeline":
+        callback_task = "re" if "re" in tasks else ("ner" if "ner" in tasks else "boundary")
+    else:
+        callback_task = "joint+" if "joint+" in tasks else "joint"
 
     callbacks = [
         StepTrackingCallback(collator), EarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
         PeriodicCheckpointCallback(output_dir=cfg.data.output_dir, every_n_steps=cfg.checkpoint.every_n_steps, wandb_run_id=wandb.run.id if wandb.run else None),
-        GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, "re" if cfg.model.model_variant == "pipeline" else "joint", cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
+        GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, callback_task, cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
     ]
+
+    if cfg.model.model_variant == "pipeline":
+        if "re" in tasks:
+            best_metric = "re_rel_strict_f1" if "ner" in tasks else "re_rel_boundary_f1"
+        elif "ner" in tasks:
+            best_metric = "ner_ner_strict_f1"
+        else:
+            best_metric = "boundary_ner_boundary_f1"
+    else:
+        if "joint+" in tasks:
+            best_metric = "joint_plus_rel_strict_f1"
+        else:
+            best_metric = "joint_rel_boundary_f1"
 
     trainer = S2GTrainer(
         scheduler_type=cfg.scheduler.type, model_variant=cfg.model.model_variant, tokens=tokens, entity_schema=entity_schema, rel_schema=rel_schema, train_eval_dataset=train_eval_dataset,
+        tasks=tasks,
         eval_cfg={"max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length, "eval_batch_size": cfg.validation.batch_size, "eval_beams": cfg.generation.num_beams},
         model=model, train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=collator, processing_class=tokenizer, callbacks=callbacks,
         args=Seq2SeqTrainingArguments(
@@ -104,7 +130,7 @@ def main() -> None:
             save_steps=cfg.validation.check_interval, 
             save_total_limit=cfg.checkpoint.save_top_k + 1, 
             load_best_model_at_end=True, 
-            metric_for_best_model="re_rel_strict_f1" if cfg.model.model_variant == "pipeline" else "joint_rel_strict_f1", 
+            metric_for_best_model=best_metric, 
             greater_is_better=True,
             logging_strategy="steps", 
             logging_steps=10, 
@@ -123,6 +149,8 @@ def main() -> None:
         trainer.save_model(str(best_dir))
         tokenizer.save_pretrained(str(best_dir))
         (best_dir / "model_variant.txt").write_text(cfg.model.model_variant, encoding="utf-8")
+        with open(best_dir / "tasks.json", "w", encoding="utf-8") as f:
+            json.dump(tasks, f)
 
     val_metrics = trainer.evaluate(eval_dataset=S2GDataset(Path(cfg.data.data_dir) / "val.jsonl", seed=cfg.train.seed))
 
