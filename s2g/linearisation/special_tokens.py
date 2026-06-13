@@ -3,7 +3,7 @@ Special token registry for the S2G model.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
@@ -59,20 +59,7 @@ class S2GTokens:
         return {attr: getattr(self, attr) for attr in all_attrs}
 
 
-class PipelineTokens(S2GTokens):
-    def __init__(self) -> None:
-        super().__init__("pipeline")
-
-
-class BoundaryJointTokens(S2GTokens):
-    def __init__(self) -> None:
-        super().__init__("joint")
-
-
-PIPELINE_TOKENS = PipelineTokens()
-BOUNDARY_JOINT_TOKENS = BoundaryJointTokens()
-
-AnyTokens = Union[PipelineTokens, BoundaryJointTokens, S2GTokens]
+AnyTokens = S2GTokens
 
 VARIANT_TO_TASKS: Dict[str, List[str]] = {
     "boundary": ["boundary"],

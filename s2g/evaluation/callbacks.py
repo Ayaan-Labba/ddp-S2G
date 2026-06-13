@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
-from transformers import PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import EarlyStoppingCallback, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 from s2g.linearisation import S2GTokens, AnyTokens, extract_triplets, parse_sel
 
@@ -165,3 +165,12 @@ def load_run_metadata(output_dir: str) -> Optional[Dict[str, Any]]:
         with open(m_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
+
+
+class S2GEarlyStoppingCallback(EarlyStoppingCallback):
+    def check_metric_value(self, args, state, control, metric_value):
+        super().check_metric_value(args, state, control, metric_value)
+        # Prevent early stopping counter from incrementing if the best metric so far is still <= 0.0
+        # (meaning the model hasn't started increasing/improving from its initial value)
+        if args.greater_is_better and (state.best_metric is None or state.best_metric <= 0.0):
+            self.early_stopping_patience_counter = 0

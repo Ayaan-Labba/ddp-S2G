@@ -11,7 +11,7 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 import torch
 from transformers import LogitsProcessor, PreTrainedTokenizerBase
 
-from s2g.linearisation import AnyTokens, PIPELINE_TOKENS, get_token_ids
+from s2g.linearisation import AnyTokens, S2GTokens, get_token_ids
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +312,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
 def build_constraint_processor(
         tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-        tokens: AnyTokens = PIPELINE_TOKENS, num_beams: int = 1
+        tokens: AnyTokens = S2GTokens("pipeline"), num_beams: int = 1
     ) -> ConstraintDecodingProcessor:
     return ConstraintDecodingProcessor(tokenizer=tokenizer, source_ids=source_ids, tokens=tokens, num_beams=num_beams)

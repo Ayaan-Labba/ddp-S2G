@@ -13,12 +13,15 @@ import torch
 import wandb
 from torch.utils.data import Subset
 from transformers import (
-    AutoModelForSeq2SeqLM, AutoTokenizer, EarlyStoppingCallback,
+    AutoModelForSeq2SeqLM, AutoTokenizer,
     Seq2SeqTrainingArguments, set_seed,
 )
 
 from s2g.data import S2GCollator, S2GDataset
-from s2g.evaluation import GenerateTextSamplesCallback, PeriodicCheckpointCallback, StepTrackingCallback, load_run_metadata
+from s2g.evaluation import (
+    GenerateTextSamplesCallback, PeriodicCheckpointCallback, 
+    StepTrackingCallback, S2GEarlyStoppingCallback, load_run_metadata
+)
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer, VARIANT_TO_TASKS
 from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
 from s2g.training import S2GTrainer
@@ -81,7 +84,7 @@ def main() -> None:
     callback_task = variant_to_callback_task.get(cfg.model.model_variant, "re")
 
     callbacks = [
-        StepTrackingCallback(collator), EarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
+        StepTrackingCallback(collator), S2GEarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
         PeriodicCheckpointCallback(output_dir=cfg.data.output_dir, every_n_steps=cfg.checkpoint.every_n_steps, wandb_run_id=wandb.run.id if wandb.run else None),
         GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, callback_task, cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
     ]

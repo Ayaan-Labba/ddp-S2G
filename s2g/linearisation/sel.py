@@ -8,7 +8,7 @@ import re
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .special_tokens import AnyTokens, PIPELINE_TOKENS
+from .special_tokens import AnyTokens, S2GTokens
 
 EntityBlock = Dict[str, Any]
 RejectedItem = Dict[str, str]
@@ -61,7 +61,7 @@ def filter_entity_blocks(entity_blocks: List[EntityBlock], allowed_rel_types: Se
 def build_sel(
         entity_blocks: List[EntityBlock], 
         task: str, 
-        tok: AnyTokens = PIPELINE_TOKENS, 
+        tok: AnyTokens = S2GTokens("pipeline"), 
         rejected_ent_types: Optional[List[str]] = None, 
         rejected_rel_types: Optional[List[str]] = None, 
         random_sel: bool = False,
@@ -128,7 +128,7 @@ class _State(Enum):
     NULL_LABEL = auto()
 
 
-def parse_sel(text: str, tok: AnyTokens = PIPELINE_TOKENS) -> Tuple[List[EntityBlock], List[RejectedItem]]:
+def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
     pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
     tokens = [t.strip() for t in pattern.split(text) if t.strip()]
