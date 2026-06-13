@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch.optim.lr_scheduler import LambdaLR
-from transformers import Seq2SeqTrainer
+from transformers import EarlyStoppingCallback, Seq2SeqTrainer
 from transformers.trainer_utils import PredictionOutput
 from tqdm.auto import tqdm
 
@@ -180,7 +180,7 @@ class S2GTrainer(Seq2SeqTrainer):
                 # Temporarily remove EarlyStoppingCallback to prevent it from disabling early stopping
                 # because the metric prefix for train eval is "train" instead of "eval"
                 early_stopping_callbacks = [
-                    cb for cb in self.callback_handler.callbacks if cb.__class__.__name__ == "EarlyStoppingCallback"
+                    cb for cb in self.callback_handler.callbacks if isinstance(cb, EarlyStoppingCallback)
                 ]
                 for cb in early_stopping_callbacks:
                     self.callback_handler.callbacks.remove(cb)
