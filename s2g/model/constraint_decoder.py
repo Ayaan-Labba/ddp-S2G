@@ -89,13 +89,7 @@ def _extract_ssi_labels(
     elif seen_ner:
         task = "ner"
     elif seen_re:
-        from s2g.linearisation.special_tokens import PipelineTokens
-        if isinstance(tokens, PipelineTokens):
-            task = "re"
-        else:
-            task = "boundary_joint"
-    else:
-        task = "boundary"
+        task = "re" if tokens.variant in {"re", "pipeline"} else "boundary_joint"
 
     return task, ent_seqs, rel_seqs
 

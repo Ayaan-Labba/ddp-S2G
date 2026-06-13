@@ -21,10 +21,10 @@ optimizer:
 
 scheduler:
   type: cosine
-  warmup_steps: 1392                    # ~12% linear warmup across 10 epochs
+  warmup_steps: 2784                    # ~12% linear warmup across 10 epochs
 
 train:
-  max_steps: 11600                     # ~100 epochs over 922 sentences with effective batch size 8
+  max_steps: 23200                     # ~200 epochs over 922 sentences with effective batch size 8
   batch_size: 8                     
   gradient_acc_steps: 1              
   gradient_clip_value: 1.0
@@ -37,7 +37,7 @@ validation:
   percent_check: 1.0
   train_eval_percent_check: 0.25
   batch_size: 256
-  early_stopping_patience: 10
+  early_stopping_patience: 20
   early_stopping_metric: boundary_f1
 
 generation:
@@ -61,7 +61,7 @@ checkpoint:
   resume_from: null
 
 callbacks:
-  sample_generation_interval: 232
+  sample_generation_interval: 1160
 
 wandb:
   project: s2g

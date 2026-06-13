@@ -49,7 +49,10 @@ def augment_re_text(source_tokens: List[str], entity_data: List[Tuple[int, int, 
     for start, end, type_str in data:
         if (start, end) in accepted:
             parts.extend(source_tokens[cursor:start])
-            parts.extend((tok.ent_start, *source_tokens[start:end], tok.type_, type_str, tok.ent_end))
+            if type_str:
+                parts.extend((tok.ent_start, *source_tokens[start:end], tok.type_, type_str, tok.ent_end))
+            else:
+                parts.extend((tok.ent_start, *source_tokens[start:end], tok.ent_end))
             cursor = end
 
     parts.extend(source_tokens[cursor:])
