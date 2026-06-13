@@ -13,9 +13,10 @@ from transformers import AutoTokenizer
 
 from s2g.data import S2GDataset
 from s2g.linearisation import (
-    JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer,
-    build_boundary_encoder_input, build_joint_encoder_input, build_joint_plus_encoder_input,
+    BOUNDARY_JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer,
+    build_boundary_encoder_input, build_boundary_joint_encoder_input, build_joint_encoder_input,
     build_ner_encoder_input, build_re_encoder_input, build_sel, organize_by_entity,
+    VARIANT_TO_TASKS,
 )
 from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
 
@@ -69,14 +70,14 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
     return res
 
 
-def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str]) -> Dict[str, Dict[int, int]]:
+def _scan_boundary_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str]) -> Dict[str, Dict[int, int]]:
+    use_boundary_joint = "boundary_joint" in tasks
     use_joint = "joint" in tasks
-    use_joint_plus = "joint+" in tasks
 
     src_lengths = {t: [] for t in tasks}
     tgt_lengths = {t: [] for t in tasks}
 
-    for i in tqdm(range(len(dataset)), desc="joint", leave=False):
+    for i in tqdm(range(len(dataset)), desc="boundary_joint", leave=False):
         inst = dataset[i]
         
         inst_ent_set = set(inst["entity_types"])
@@ -86,13 +87,13 @@ def _scan_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_sc
         
         blocks = organize_by_entity(inst["entities"], inst["relations"])
 
-        if use_joint:
-            src_lengths["joint"].append(len(tokenizer.encode(build_joint_encoder_input(rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
-            tgt_lengths["joint"].append(len(tokenizer.encode(build_sel(blocks, "joint", JOINT_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
+        if use_boundary_joint:
+            src_lengths["boundary_joint"].append(len(tokenizer.encode(build_boundary_joint_encoder_input(rel_schema, inst["text"], tok=BOUNDARY_JOINT_TOKENS), add_special_tokens=True)))
+            tgt_lengths["boundary_joint"].append(len(tokenizer.encode(build_sel(blocks, "boundary_joint", BOUNDARY_JOINT_TOKENS, rejected_rel_types=neg_r), add_special_tokens=True)))
 
-        if use_joint_plus:
-            src_lengths["joint+"].append(len(tokenizer.encode(build_joint_plus_encoder_input(entity_schema, rel_schema, inst["text"], tok=JOINT_TOKENS), add_special_tokens=True)))
-            tgt_lengths["joint+"].append(len(tokenizer.encode(build_sel(blocks, "joint+", JOINT_TOKENS, rejected_ent_types=neg_e, rejected_rel_types=neg_r), add_special_tokens=True)))
+        if use_joint:
+            src_lengths["joint"].append(len(tokenizer.encode(build_joint_encoder_input(entity_schema, rel_schema, inst["text"], tok=BOUNDARY_JOINT_TOKENS), add_special_tokens=True)))
+            tgt_lengths["joint"].append(len(tokenizer.encode(build_sel(blocks, "joint", BOUNDARY_JOINT_TOKENS, rejected_ent_types=neg_e, rejected_rel_types=neg_r), add_special_tokens=True)))
 
     res = {}
     for t in tasks:
@@ -119,17 +120,13 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
     variant = cfg.model.model_variant
-    add_special_tokens_to_tokenizer(tokenizer, PIPELINE_TOKENS if variant == "pipeline" else JOINT_TOKENS)
+    add_special_tokens_to_tokenizer(tokenizer, PIPELINE_TOKENS if variant in {"pipeline", "untyped pipeline"} else BOUNDARY_JOINT_TOKENS)
 
     entity_schema, rel_schema = load_entity_schema(cfg.data.entity_schema_file), load_schema(cfg.data.schema_file)
     
-    tasks = cfg.model.tasks
-    if tasks is None:
-        tasks = ["ner", "re"] if variant == "pipeline" else ["joint", "joint+"]
-    else:
-        tasks = list(tasks)
+    tasks = VARIANT_TO_TASKS[variant]
 
-    scan_fn = lambda d, tok, es, rs: (_scan_pipeline(d, tok, es, rs, tasks) if variant == "pipeline" else _scan_joint(d, tok, es, rs, tasks))
+    scan_fn = lambda d, tok, es, rs: (_scan_pipeline(d, tok, es, rs, tasks) if variant in {"pipeline", "untyped pipeline"} else _scan_boundary_joint(d, tok, es, rs, tasks))
     per_split = {n: scan_fn(S2GDataset(Path(cfg.data.data_dir) / f"{n}.jsonl", seed=cfg.train.seed), tokenizer, entity_schema, rel_schema) 
                  for n in ("train", "val", "test") if (Path(cfg.data.data_dir) / f"{n}.jsonl").exists()}
 

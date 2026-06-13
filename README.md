@@ -1,6 +1,6 @@
 # Sentence-to-Graph (S2G): Automatic Knowledge Graph Generation from Unstructured Text
 
-A seq2seq approach to joint entity and relation extraction framed as a text-to-text problem. The encoder receives a source sentence prefixed by a **Schema-Structured Input (SSI)** that enumerates the entity and relation types in scope. The decoder generates a flat **Structured Extraction Language (SEL)** string encoding all entities, their types, pairwise relations, and explicit rejections of absent schema types. At test time, a task-specific finite-state machine (FSM) constrains decoding to produce only valid SEL expressions.
+A seq2seq approach to boundary_joint entity and relation extraction framed as a text-to-text problem. The encoder receives a source sentence prefixed by a **Schema-Structured Input (SSI)** that enumerates the entity and relation types in scope. The decoder generates a flat **Structured Extraction Language (SEL)** string encoding all entities, their types, pairwise relations, and explicit rejections of absent schema types. At test time, a task-specific finite-state machine (FSM) constrains decoding to produce only valid SEL expressions.
 
 Built on **Flan-T5 Base** (~250M parameters), pre-trained on [REBEL](https://huggingface.co/datasets/Babelscape/rebel-dataset), and fine-tuned on CoNLL04, NYT-multi, and SciERC.
 
@@ -56,9 +56,16 @@ python -m s2g.data.preprocess_conll04 \
     --output_dir data/conll04
 ```
 
-### Step 2 — Train the Model (Pipeline or Joint)
+### Step 2 — Train the Model
 
 Use the unified `train.py` script. The model variant is determined by the config overrides.
+
+Available `model.model_variant` options:
+* **`pipeline`**: Standard Pipeline (NER -> RE).
+* **`boundary_pipeline`**: Boundary Pipeline (Boundary -> Boundary RE).
+* **`joint`**: Standard BoundaryJoint (boundary_jointly predicts entity boundaries, types, and relations).
+* **`boundary_joint`**: Boundary BoundaryJoint (boundary_jointly predicts entity boundaries and relations, no entity types).
+* **`boundary`**, **`ner`**, **`re`**, **`boundary_re`**: Single-task variants.
 
 ```bash
 # Multi-GPU training using Torchrun
@@ -139,7 +146,7 @@ Starting-point suggestions; tune via W&B sweeps.
 ## Metrics Computed
 
 `evaluate.py` automatically computes micro (corpus-level) and macro (instance-average) variants of:
-* **NER Boundary F1:** Entity text span match (no type)
-* **NER Strict F1:** Entity text + type match
-* **Relation Boundary F1:** `(head, rel_type, tail)` triplet match
-* **Relation Strict F1:** `(head, head_type, rel_type, tail, tail_type)` quintuple match
+* **NER Boundary F1:** Entity text span match (no type). Calculated for `boundary`, `ner`, `boundary_pipeline`, `pipeline`, and `joint`.
+* **NER Strict F1:** Entity text + type match. Calculated for `ner`, `pipeline`, and `joint`.
+* **Relation Boundary F1:** `(head, rel_type, tail)` triplet match. Calculated for `re`, `boundary_re`, `boundary_pipeline`, `pipeline`, `boundary_joint`, and `joint`.
+* **Relation Strict F1:** `(head, head_type, rel_type, tail, tail_type)` quintuple match. Calculated for `re`, `pipeline`, and `joint`.

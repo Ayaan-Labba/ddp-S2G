@@ -16,16 +16,15 @@ import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from s2g.linearisation import (
-    JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer,
-    build_boundary_encoder_input, build_joint_encoder_input, build_joint_plus_encoder_input,
+    S2GTokens, add_special_tokens_to_tokenizer,
+    build_boundary_encoder_input, build_boundary_joint_encoder_input, build_joint_encoder_input,
     build_ner_encoder_input, build_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
+    VARIANT_TO_TASKS,
 )
 from s2g.model import build_constraint_processor
 from s2g.scripts.config_utils import load_entity_schema, load_schema
 
 logger = logging.getLogger(__name__)
-
-# EFFICIENCY FIX: Cache NLTK checks globally to eliminate filesystem polling on every call
 _NLTK_READY = False
 
 def _ensure_nltk_punkt() -> None:
@@ -46,7 +45,6 @@ def _ensure_nltk_punkt() -> None:
 
 
 def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src, max_tgt, device, constraint_decoding=False) -> str:
-    # EFFICIENCY FIX: non_blocking=True for pipeline batching
     tok_out = tokenizer([encoder_input], max_length=max_src, truncation=True, return_tensors="pt").to(device, non_blocking=True)
     gen_kwargs = {**tok_out, "num_beams": num_beams, "max_length": max_tgt, "length_penalty": 0.0, "no_repeat_ngram_size": 0, "early_stopping": False}
     
@@ -75,6 +73,7 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
     use_boundary = "boundary" in tasks
     use_ner = "ner" in tasks
     use_re = "re" in tasks
+    use_boundary_re = "boundary_re" in tasks
 
     b_ents = []
     if use_boundary:
@@ -89,11 +88,13 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
         n_ents, _ = parse_sel(_generate_single(model, tokenizer, build_ner_encoder_input(entity_schema, src_toks, n_spans, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
 
     r_ents = []
-    if use_re:
+    if use_re or use_boundary_re:
         if use_ner:
             r_entities = list(dict.fromkeys((*s, e["type"]) for e in n_ents if e.get("type") for s in find_all_token_spans(src_toks, e["text"])))
-        else:
+        elif use_boundary:
             r_entities = list(dict.fromkeys((*s, "") for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
+        else:
+            r_entities = []
         r_ents, _ = parse_sel(_generate_single(model, tokenizer, build_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
 
     res = {"text": text, "tokens": src_toks}
@@ -101,25 +102,25 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
         res["boundary_spans"] = [e["text"] for e in b_ents]
     if use_ner:
         res["ner_entities"] = [{"text": e["text"], "type": e.get("type")} for e in n_ents]
-    if use_re:
+    if use_re or use_boundary_re:
         res["re_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(r_ents)]
     return res
 
 
-def extract_joint(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None) -> Dict[str, Any]:
+def extract_boundary_joint(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None) -> Dict[str, Any]:
     device = device or next(model.parameters()).device
     if tasks is None:
-        tasks = ["joint", "joint+"]
+        tasks = ["boundary_joint", "joint"]
+    use_boundary_joint = "boundary_joint" in tasks
     use_joint = "joint" in tasks
-    use_joint_plus = "joint+" in tasks
 
     res = {"text": text}
+    if use_boundary_joint:
+        j_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_joint_encoder_input(rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        res["boundary_joint_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(j_ents)]
     if use_joint:
-        j_ents, _ = parse_sel(_generate_single(model, tokenizer, build_joint_encoder_input(rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
-        res["joint_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(j_ents)]
-    if use_joint_plus:
-        jp_ents, _ = parse_sel(_generate_single(model, tokenizer, build_joint_plus_encoder_input(entity_schema, rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
-        res["joint_plus"] = {"entities": [{"text": e["text"], "type": e.get("type")} for e in jp_ents], "triplets": [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(jp_ents)]}
+        jp_ents, _ = parse_sel(_generate_single(model, tokenizer, build_joint_encoder_input(entity_schema, rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        res["joint"] = {"entities": [{"text": e["text"], "type": e.get("type")} for e in jp_ents], "triplets": [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(jp_ents)]}
     return res
 
 
@@ -138,16 +139,17 @@ def main() -> None:
     elif (Path(args.checkpoint) / "tasks.txt").exists():
         tasks = [t.strip() for t in (Path(args.checkpoint) / "tasks.txt").read_text(encoding="utf-8").strip().split(",") if t.strip()]
     else:
-        tasks = ["ner", "re"] if model_variant == "pipeline" else ["joint", "joint+"]
+        tasks = VARIANT_TO_TASKS[model_variant]
 
-    tokens = PIPELINE_TOKENS if model_variant == "pipeline" else JOINT_TOKENS
+    use_rejection = "<null>" in tokenizer.get_vocab()
+    tokens = S2GTokens(model_variant, use_rejection=use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
 
     kwargs = {"model": model, "tokenizer": tokenizer, "entity_schema": load_entity_schema(args.entity_schema_file), "rel_schema": load_schema(args.schema_file), "tokens": tokens, "num_beams": args.num_beams, "max_source_length": args.max_source_length, "max_target_length": args.max_target_length, "device": device, "constraint_decoding": args.constraint_decoding.lower() in ("true", "1", "yes"), "tasks": tasks}
-    extract_fn = extract_pipeline if model_variant == "pipeline" else extract_joint
+    extract_fn = extract_pipeline if model_variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else extract_boundary_joint
 
     if args.input_file:
         with open(args.input_file, encoding="utf-8") as f: sentences = [ln.strip() for ln in f if ln.strip()]

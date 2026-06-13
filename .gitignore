@@ -2,7 +2,7 @@
 s2g_env/
 *__pycache__/
 .vscode/
-submit_train.sh
+cleanup.py
 
 # Data
 /data/
@@ -12,3 +12,4 @@ outputs/
 
 # Logs
 wandb/
+*.log

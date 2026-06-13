@@ -17,9 +17,9 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 from s2g.data import S2GDataset
 from s2g.evaluation import compute_metrics_for_task
 from s2g.linearisation import (
-    AnyTokens, EntityBlock, JOINT_TOKENS, PIPELINE_TOKENS,
+    S2GTokens, AnyTokens, EntityBlock, VARIANT_TO_TASKS,
     add_special_tokens_to_tokenizer, build_boundary_encoder_input,
-    build_joint_encoder_input, build_joint_plus_encoder_input,
+    build_boundary_joint_encoder_input, build_joint_encoder_input,
     build_ner_encoder_input, build_re_encoder_input, extract_triplets,
     find_all_token_spans, parse_sel,
 )
@@ -33,8 +33,6 @@ def _generate_batch(
     model: Any, tokenizer: Any, encoder_inputs: List[str], tokens: AnyTokens,
     max_source_length: int, max_target_length: int, eval_beams: int, device: torch.device, constraint_decoding: bool = False
 ) -> List[List[EntityBlock]]:
-    
-    # EFFICIENCY FIX: non_blocking=True for async transfers
     tok_out = tokenizer(
         encoder_inputs, max_length=max_source_length, truncation=True, padding="longest", return_tensors="pt"
     ).to(device, non_blocking=True)
@@ -49,8 +47,6 @@ def _generate_batch(
     
     with torch.inference_mode(), ctx: 
         generated = model.generate(**gen_kwargs)
-
-    # EFFICIENCY FIX: Compute special tokens once per batch
     specials = [tok for tok in (tokenizer.pad_token, tokenizer.eos_token, tokenizer.bos_token) if tok]
     all_entities = []
     
@@ -81,6 +77,7 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
     use_boundary = "boundary" in tasks
     use_ner = "ner" in tasks
     use_re = "re" in tasks
+    use_boundary_re = "boundary_re" in tasks
 
     def _run(inputs):
         return [ent for i in tqdm(range(0, len(inputs), batch_size), leave=False) 
@@ -110,15 +107,25 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
     
     r_per_inst = []
     ner_maps = []
-    if use_re:
+    if use_re or use_boundary_re:
         r_inputs = []
-        for inst, b, n in zip(instances, b_per_inst, n_per_inst):
-            if use_ner:
-                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens))
-                ner_maps.append({e["text"]: e.get("type", "") for e in n})
-            else:
-                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens))
-                ner_maps.append({e["text"]: "" for e in b})
+        if not use_boundary and not use_ner:
+            for inst in instances:
+                if use_re:
+                    entity_data = [(int(e["offset"][0]), int(e["offset"][1]), e.get("type", "")) for e in inst["entities"]]
+                    ner_maps.append({e["text"]: e.get("type", "") for e in inst["entities"]})
+                else:
+                    entity_data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
+                    ner_maps.append({e["text"]: "" for e in inst["entities"]})
+                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], entity_data, False, tokens))
+        else:
+            for inst, b, n in zip(instances, b_per_inst, n_per_inst):
+                if use_ner:
+                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens))
+                    ner_maps.append({e["text"]: e.get("type", "") for e in n})
+                else:
+                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens))
+                    ner_maps.append({e["text"]: "" for e in b})
         r_per_inst = _run(r_inputs)
     else:
         r_per_inst = [[] for _ in instances]
@@ -134,44 +141,47 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
             res["boundary_spans"] = [e["text"] for e in b_per_inst[i]]
         if use_ner:
             res["ner_entities"] = [{"text": e["text"], "type": e.get("type")} for e in n_per_inst[i]]
-        if use_re:
+        if use_re or use_boundary_re:
             res["re_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(r_per_inst[i])]
         per_inst.append(res)
 
     g_ents = [[e["text"] for e in inst["entities"]] for inst in instances]
     
     if use_boundary:
-        m.update({f"boundary_{k}": v for k, v in compute_metrics_for_task("boundary", all_pred_entities=[[e["text"] for e in b] for b in b_per_inst], all_gold_entities=g_ents).items()})
+        m.update(compute_metrics_for_task("boundary", all_pred_entities=[[e["text"] for e in b] for b in b_per_inst], all_gold_entities=g_ents))
     
     if use_ner:
-        m.update({f"ner_{k}": v for k, v in compute_metrics_for_task("ner", all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], all_gold_entities=g_ents, all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in n if e.get("type")] for n in n_per_inst], all_gold_entity_mentions=[[(e["text"], e.get("type","")) for e in inst["entities"]] for inst in instances]).items()})
+        m.update(compute_metrics_for_task("ner", all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], all_gold_entities=g_ents, all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in n if e.get("type")] for n in n_per_inst], all_gold_entity_mentions=[[(e["text"], e.get("type","")) for e in inst["entities"]] for inst in instances]))
         
     if use_re:
         g_quints = [[(r["head"]["text"], r["head"].get("type","") if use_ner else "", r["type"], r["tail"]["text"], r["tail"].get("type","") if use_ner else "") for r in inst["relations"]] for inst in instances]
-        m.update({f"re_{k}": v for k, v in compute_metrics_for_task("re", all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], ner_maps[i].get(e["text"], ""), rel["type"], rel["tail"], ner_maps[i].get(rel["tail"], "")) for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints).items()})
+        m.update(compute_metrics_for_task("re", all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], ner_maps[i].get(e["text"], ""), rel["type"], rel["tail"], ner_maps[i].get(rel["tail"], "")) for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
+
+    if use_boundary_re:
+        m.update(compute_metrics_for_task("boundary_re", all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances]))
 
     return per_inst, m
 
 
-def _evaluate_joint(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None) -> Tuple[Dict[str, Any], Dict[str, float]]:
+def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None) -> Tuple[Dict[str, Any], Dict[str, float]]:
     if tasks is None:
-        tasks = ["joint", "joint+"]
+        tasks = ["boundary_joint", "joint"]
+    use_boundary_joint = "boundary_joint" in tasks
     use_joint = "joint" in tasks
-    use_joint_plus = "joint+" in tasks
 
     def _run(inputs):
         return [ent for i in tqdm(range(0, len(inputs), batch_size), leave=False) 
                 for ent in _generate_batch(model, tokenizer, inputs[i:i+batch_size], tokens, max_source_length, max_target_length, eval_beams, device, constraint_decoding)]
 
     j_per_inst = []
-    if use_joint:
-        j_per_inst  = _run([build_joint_encoder_input(rel_schema, inst["text"], False, tokens) for inst in instances])
+    if use_boundary_joint:
+        j_per_inst  = _run([build_boundary_joint_encoder_input(rel_schema, inst["text"], False, tokens) for inst in instances])
     else:
         j_per_inst = [[] for _ in instances]
 
     jp_per_inst = []
-    if use_joint_plus:
-        jp_per_inst = _run([build_joint_plus_encoder_input(entity_schema, rel_schema, inst["text"], False, tokens) for inst in instances])
+    if use_joint:
+        jp_per_inst = _run([build_joint_encoder_input(entity_schema, rel_schema, inst["text"], False, tokens) for inst in instances])
     else:
         jp_per_inst = [[] for _ in instances]
 
@@ -184,18 +194,29 @@ def _evaluate_joint(model, tokenizer, instances, entity_schema, rel_schema, toke
             "text": inst["text"],
             "gold_triplets": [{"head": r["head"]["text"], "type": r["type"], "tail": r["tail"]["text"]} for r in inst["relations"]]
         }
+        if use_boundary_joint:
+            res["boundary_joint_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(j_per_inst[i])]
         if use_joint:
-            res["joint_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(j_per_inst[i])]
-        if use_joint_plus:
-            res["joint_plus"] = {"entities": [{"text": e["text"], "type": e.get("type")} for e in jp_per_inst[i]], "triplets": [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(jp_per_inst[i])]}
+            res["joint"] = {"entities": [{"text": e["text"], "type": e.get("type")} for e in jp_per_inst[i]], "triplets": [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(jp_per_inst[i])]}
         per_inst.append(res)
 
-    if use_joint:
-        m.update({f"joint_{k}": v for k, v in compute_metrics_for_task("joint", all_pred_triplets=[extract_triplets(j) for j in j_per_inst], all_gold_triplets=gold_trips).items()})
+    if use_boundary_joint:
+        m.update(compute_metrics_for_task("boundary_joint", all_pred_triplets=[extract_triplets(j) for j in j_per_inst], all_gold_triplets=gold_trips))
     
-    if use_joint_plus:
+    if use_joint:
+        gold_heads_per_inst = [{r["head"]["text"] for r in inst["relations"]} for inst in instances]
         jp_maps = [{e["text"]: e.get("type", "") for e in jp} for jp in jp_per_inst]
-        m.update({f"joint_plus_{k}": v for k, v in compute_metrics_for_task("joint+", all_pred_triplets=[extract_triplets(jp) for jp in jp_per_inst], all_gold_triplets=gold_trips, all_pred_quintuples=[[(e["text"], jp_maps[i].get(e["text"], ""), rel["type"], rel["tail"], jp_maps[i].get(rel["tail"], "")) for e in jp_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=gold_quints, all_pred_entities=[[e["text"] for e in jp] for jp in jp_per_inst], all_gold_entities=[[e["text"] for e in inst["entities"]] for inst in instances], all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in jp if e.get("type")] for jp in jp_per_inst], all_gold_entity_mentions=[[(e["text"], e.get("type","")) for e in inst["entities"]] for inst in instances]).items()})
+        m.update(compute_metrics_for_task(
+            "joint", 
+            all_pred_triplets=[extract_triplets(jp) for jp in jp_per_inst], 
+            all_gold_triplets=gold_trips, 
+            all_pred_quintuples=[[(e["text"], jp_maps[i].get(e["text"], ""), rel["type"], rel["tail"], rel.get("tail_type") or jp_maps[i].get(rel["tail"], "")) for e in jp_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], 
+            all_gold_quintuples=gold_quints, 
+            all_pred_entities=[[e["text"] for e in jp] for jp in jp_per_inst], 
+            all_gold_entities=[[e["text"] for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)], 
+            all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in jp if e.get("type")] for jp in jp_per_inst], 
+            all_gold_entity_mentions=[[(e["text"], e.get("type", "")) for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)]
+        ))
 
     return per_inst, m
 
@@ -219,13 +240,10 @@ def main() -> None:
     elif (Path(ckpt) / "tasks.txt").exists():
         tasks = [t.strip() for t in (Path(ckpt) / "tasks.txt").read_text(encoding="utf-8").strip().split(",") if t.strip()]
     else:
-        tasks = cfg.model.tasks
-        if tasks is None:
-            tasks = ["ner", "re"] if model_variant == "pipeline" else ["joint", "joint+"]
-        else:
-            tasks = list(tasks)
+        tasks = VARIANT_TO_TASKS[model_variant]
 
-    tokens = PIPELINE_TOKENS if model_variant == "pipeline" else JOINT_TOKENS
+    use_rejection = "<null>" in tokenizer.get_vocab()
+    tokens = S2GTokens(model_variant, use_rejection=use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -234,7 +252,7 @@ def main() -> None:
     rel_schema, entity_schema = load_schema(cfg.data.schema_file), load_entity_schema(cfg.data.entity_schema_file)
     instances = [inst for inst in S2GDataset(Path(cfg.data.data_dir) / f"{cfg.evaluation.split}.jsonl", seed=cfg.train.seed)]
     
-    eval_fn = _evaluate_pipeline if model_variant == "pipeline" else _evaluate_joint
+    eval_fn = _evaluate_pipeline if model_variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else _evaluate_boundary_joint
     per_inst_results, metrics = eval_fn(
         model, tokenizer, instances, entity_schema, rel_schema, tokens,
         cfg.tokenization.max_source_length, cfg.tokenization.max_target_length,

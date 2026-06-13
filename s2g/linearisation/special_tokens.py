@@ -3,67 +3,87 @@ Special token registry for the S2G model.
 """
 from __future__ import annotations
 
-import dataclasses
-from dataclasses import dataclass
-from functools import cached_property
 from typing import Dict, List, Optional, Union
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 
-@dataclass(frozen=True)
-class PipelineTokens:
-    """Immutable token registry for the Pipeline model."""
-    bound: str = "<bound>"
-    ner:   str = "<ner>"
-    re:    str = "<re>"
-    type_: str = "<type>"
-    rel:   str = "<rel>"
-    ent_start: str = "<ent>"
-    ent_end:   str = "</ent>"
-    tail: str = "<tail>"
-    null: str = "<null>"
+class S2GTokens:
+    def __init__(self, variant: str, use_rejection: bool = False) -> None:
+        self.variant = variant
+        self.use_rejection = use_rejection
+        
+        self.bound = "<bound>"
+        self.ner = "<ner>"
+        self.re = "<re>"
+        self.type_ = "<type>"
+        self.rel = "<rel>"
+        self.ent_start = "<ent>"
+        self.ent_end = "</ent>"
+        self.tail = "<tail>"
+        self.null = "<null>"
+        self.head = "<head>"
+        self.nest = "<nest>"
+        self.text = "<text>"
 
-    @cached_property
+        active_map = {
+            "boundary": {"bound", "ent_start", "ent_end"},
+            "ner": {"ner", "text", "ent_start", "ent_end", "type_"},
+            "re": {"re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
+            "boundary_re": {"re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
+            "pipeline": {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
+            "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
+            "boundary_joint": {"re", "text", "head", "rel", "tail", "nest"},
+            "joint": {"ner", "re", "text", "head", "type_", "rel", "tail", "nest"},
+        }
+        self._active = set(active_map.get(variant, active_map["pipeline"]))
+        if use_rejection or variant != "boundary":
+            self._active.add("null")
+
+    @property
     def task_delimiters(self) -> List[str]:
-        return [self.bound, self.ner, self.re]
+        delims = []
+        if "bound" in self._active:
+            delims.append(self.bound)
+        if "text" in self._active:
+            delims.append(self.text)
+        return delims
 
-    @cached_property
+    @property
     def all_tokens(self) -> List[str]:
-        return list(self.as_dict().values())
+        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+        return [getattr(self, attr) for attr in all_attrs if attr in self._active]
 
     def as_dict(self) -> Dict[str, str]:
-        return dataclasses.asdict(self)
+        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+        return {attr: getattr(self, attr) for attr in all_attrs}
 
 
-@dataclass(frozen=True)
-class JointTokens:
-    """Immutable token registry for the Joint model."""
-    joint:      str = "<joint>"
-    joint_plus: str = "<joint+>"
-    type_: str = "<type>"
-    rel:   str = "<rel>"
-    ent_start: str = "<ent>"
-    ent_end:   str = "</ent>"
-    tail: str = "<tail>"
-    null: str = "<null>"
+class PipelineTokens(S2GTokens):
+    def __init__(self) -> None:
+        super().__init__("pipeline")
 
-    @cached_property
-    def task_delimiters(self) -> List[str]:
-        return [self.joint, self.joint_plus]
 
-    @cached_property
-    def all_tokens(self) -> List[str]:
-        return list(self.as_dict().values())
-
-    def as_dict(self) -> Dict[str, str]:
-        return dataclasses.asdict(self)
+class BoundaryJointTokens(S2GTokens):
+    def __init__(self) -> None:
+        super().__init__("joint")
 
 
 PIPELINE_TOKENS = PipelineTokens()
-JOINT_TOKENS = JointTokens()
+BOUNDARY_JOINT_TOKENS = BoundaryJointTokens()
 
-AnyTokens = Union[PipelineTokens, JointTokens]
+AnyTokens = Union[PipelineTokens, BoundaryJointTokens, S2GTokens]
+
+VARIANT_TO_TASKS: Dict[str, List[str]] = {
+    "boundary": ["boundary"],
+    "ner": ["ner"],
+    "re": ["re"],
+    "boundary_re": ["boundary_re"],
+    "pipeline": ["ner", "re"],
+    "boundary_pipeline": ["boundary", "boundary_re"],
+    "boundary_joint": ["boundary_joint"],
+    "joint": ["joint"],
+}
 
 
 def add_special_tokens_to_tokenizer(
@@ -83,7 +103,14 @@ def get_token_ids(
     tokenizer: PreTrainedTokenizerBase,
     tokens: AnyTokens,
 ) -> Dict[str, int]:
-    return {
-        name: tokenizer.convert_tokens_to_ids(token_str)
-        for name, token_str in tokens.as_dict().items()
-    }
+    res = {}
+    unk_id = tokenizer.unk_token_id
+    all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+    for idx, name in enumerate(all_attrs):
+        token_str = getattr(tokens, name)
+        token_id = tokenizer.convert_tokens_to_ids(token_str)
+        if name in tokens._active and token_id is not None and token_id != unk_id:
+            res[name] = token_id
+        else:
+            res[name] = -(idx + 200)
+    return res

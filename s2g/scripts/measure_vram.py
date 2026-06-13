@@ -19,18 +19,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from s2g.linearisation import JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer
+from s2g.linearisation import BOUNDARY_JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer
 from s2g.scripts.config_utils import load_config
 
 logger = logging.getLogger(__name__)
 
 # Tasks exercised per model variant — must match compute_loss and _run_generation
 _TRAIN_TASK_KEYS: Dict[str, Tuple[str, ...]] = {
-    "pipeline": ("boundary", "ner", "re"),
-    "joint":    ("joint", "joint_plus"),
+    "pipeline": ("ner", "re"),
+    "untyped pipeline": ("boundary", "re"),
+    "boundary_joint": ("joint",),
+    "untyped boundary_joint": ("boundary_joint",),
 }
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _mb(n_bytes: int) -> float:
     return n_bytes / 1024 ** 2
@@ -75,9 +75,6 @@ def _make_gen_batch(
         "input_ids":      torch.full((batch_size, max_src), pad_id, dtype=torch.long, device=device),
         "attention_mask": torch.ones ((batch_size, max_src),         dtype=torch.long, device=device),
     }
-
-
-# ── Train check ───────────────────────────────────────────────────────────────
 
 def check_train_vram(
     model: Any,
@@ -217,9 +214,6 @@ def binary_search_max_train_batch(
 
     return best, best_result[0], best_result[1]
 
-
-# ── Eval check ────────────────────────────────────────────────────────────────
-
 def check_eval_vram_at(
     model: Any,
     pad_id: int,
@@ -297,9 +291,6 @@ def binary_search_max_eval_batch(
 
     return best, best_result[0], best_result[1]
 
-
-# ── Precision context ─────────────────────────────────────────────────────────
-
 def _get_autocast_ctx(precision: str, device: torch.device):
     import contextlib
     if device.type == "cuda":
@@ -308,9 +299,6 @@ def _get_autocast_ctx(precision: str, device: torch.device):
         if precision == "fp16":
             return torch.autocast(device_type="cuda", dtype=torch.float16)
     return contextlib.nullcontext()
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -327,7 +315,7 @@ def main() -> None:
     logger.info("Loading model and tokenizer: %s", cfg.model.name)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    tokens    = PIPELINE_TOKENS if cfg.model.model_variant == "pipeline" else JOINT_TOKENS
+    tokens    = PIPELINE_TOKENS if cfg.model.model_variant in {"pipeline", "untyped pipeline"} else BOUNDARY_JOINT_TOKENS
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
     model.to(device)
 
@@ -344,8 +332,6 @@ def main() -> None:
         "Config: variant=%s | tasks=%s | max_src=%d | max_tgt=%d | precision=%s | beams=%d",
         cfg.model.model_variant, list(task_keys), max_src, max_tgt, precision, num_beams,
     )
-
-    # ── 1. Training VRAM — binary search ─────────────────────────────────────
     logger.info("─" * 60)
     logger.info("TRAIN CHECK — binary-searching max train batch size (forward+backward, all task heads%s)",
                 ", gradient_checkpointing=True" if cfg.train.gradient_checkpointing else "")
@@ -370,8 +356,6 @@ def main() -> None:
             "(set lower to leave headroom; account for gradient_acc_steps in effective batch size)",
             max_train_bs,
         )
-
-    # ── 2. Eval VRAM — binary search with optimizer states resident ───────────
     logger.info("─" * 60)
     logger.info(
         "EVAL CHECK — populating AdamW optimizer states before search "

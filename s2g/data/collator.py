@@ -1,5 +1,5 @@
 """
-S2G Data Collator for multi-task Pipeline and Joint model fine-tuning.
+S2G Data Collator for multi-task Pipeline and BoundaryJoint model fine-tuning.
 """
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from transformers import PreTrainedTokenizerBase
 
 from s2g.linearisation import (
-    JOINT_TOKENS, PIPELINE_TOKENS, AnyTokens,
-    build_boundary_encoder_input, build_joint_encoder_input,
-    build_joint_plus_encoder_input, build_ner_encoder_input,
+    S2GTokens, AnyTokens, VARIANT_TO_TASKS,
+    build_boundary_encoder_input, build_boundary_joint_encoder_input,
+    build_joint_encoder_input, build_ner_encoder_input,
     build_re_encoder_input, build_sel, organize_by_entity,
     filter_entity_blocks
 )
@@ -24,7 +24,7 @@ class S2GCollator:
     ) -> None:
         self._variant = config.get("model_variant")
         self._mode = config.get("mode", "budget")
-        if self._variant not in {"pipeline", "joint"} or self._mode not in {"budget", "bernoulli"}:
+        if self._variant not in VARIANT_TO_TASKS or self._mode not in {"budget", "bernoulli"}:
             raise ValueError(f"Invalid model_variant '{self._variant}' or mode '{self._mode}'.")
 
         self._tokenizer = tokenizer
@@ -33,24 +33,21 @@ class S2GCollator:
         self._rel_schema = list(rel_schema)
         self._rel_schema_set = set(rel_schema)
         self._cfg = config
-        self._tok: AnyTokens = PIPELINE_TOKENS if self._variant == "pipeline" else JOINT_TOKENS
-        
         self._random_prompt = config.get("random_prompt", False)
         self._random_sel = config.get("random_sel", False)
+        self._use_rejection = config.get("use_rejection", False)
+        self._tok: AnyTokens = S2GTokens(self._variant, use_rejection=self._use_rejection)
         self._step = 0
 
-        self._tasks = config.get("tasks")
-        if self._tasks is None:
-            self._tasks = ["ner", "re"] if self._variant == "pipeline" else ["joint", "joint+"]
-        else:
-            self._tasks = list(self._tasks)
+        self._tasks = VARIANT_TO_TASKS[self._variant]
 
         task_to_key = {
             "boundary": "boundary",
             "ner": "ner",
             "re": "re",
-            "joint": "joint",
-            "joint+": "joint_plus"
+            "boundary_re": "boundary_re",
+            "boundary_joint": "boundary_joint",
+            "joint": "joint"
         }
         self._task_keys = [task_to_key.get(t, t) for t in self._tasks]
 
@@ -63,7 +60,7 @@ class S2GCollator:
         self._step = value
 
     def __call__(self, batch: List[Dict]) -> Dict[str, Any]:
-        return self._collate_pipeline(batch) if self._variant == "pipeline" else self._collate_joint(batch)
+        return self._collate_pipeline(batch) if self._variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else self._collate_boundary_joint(batch)
 
     def _collate_pipeline(self, batch: List[Dict]) -> Dict[str, Any]:
         tasks = {tk: ([], []) for tk in self._task_keys}
@@ -77,7 +74,7 @@ class S2GCollator:
                 
         return {k: v for tk, (enc, dec) in tasks.items() for k, v in self._tokenize_task(tk, enc, dec).items()}
 
-    def _collate_joint(self, batch: List[Dict]) -> Dict[str, Any]:
+    def _collate_boundary_joint(self, batch: List[Dict]) -> Dict[str, Any]:
         tasks = {tk: ([], []) for tk in self._task_keys}
         for inst in batch:
             blocks = organize_by_entity(inst["entities"], inst["relations"])
@@ -106,40 +103,51 @@ class S2GCollator:
         allowed_ents = set(pos_ent)
         filtered_blocks = [b for b in blocks if b.get("type") in allowed_ents]
         
-        return enc, build_sel(filtered_blocks, "ner", self._tok, rejected_ent_types=neg_ent, random_sel=self._random_sel)
+        return enc, build_sel(filtered_blocks, "ner", self._tok, rejected_ent_types=neg_ent, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
     def _prepare_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
-        use_ner = "ner" in self._tasks
-        data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"] if use_ner else "") for e in inst["entities"]]
+        data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in inst["entities"]]
         enc = build_re_encoder_input(
             pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
-        return enc, build_sel(filtered_blocks, "re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel)
+        return enc, build_sel(filtered_blocks, "re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
-    def _prepare_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
+    def _prepare_boundary_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
-        enc = build_joint_encoder_input(
+        data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
+        enc = build_re_encoder_input(
+            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok
+        )
+        filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+        
+        return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+
+    def _prepare_boundary_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
+        pos_rel, neg_rel = self._sample_types(
+            inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
+        )
+        enc = build_boundary_joint_encoder_input(
             pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
-        return enc, build_sel(filtered_blocks, "joint", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel)
+        return enc, build_sel(filtered_blocks, "boundary_joint", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
-    def _prepare_joint_plus(self, inst: Dict, blocks: List) -> Tuple[str, str]:
+    def _prepare_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_ent, neg_ent = self._sample_types(
             inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
         )
         pos_rel, neg_rel = self._sample_types(
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
-        enc = build_joint_plus_encoder_input(
+        enc = build_joint_encoder_input(
             pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok
         )
         allowed_ents = set(pos_ent)
@@ -149,15 +157,13 @@ class S2GCollator:
         )
         
         return enc, build_sel(
-            filtered_blocks, "joint+", self._tok, rejected_ent_types=neg_ent, 
-            rejected_rel_types=neg_rel, random_sel=self._random_sel
+            filtered_blocks, "joint", self._tok, rejected_ent_types=neg_ent, 
+            rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection
         )
 
     def _sample_types(
             self, instance_types: List[str], schema: List[str], max_types: Optional[int]
         ) -> Tuple[List[str], List[str]]:
-        
-        # EFFICIENCY FIX: Evaluate set once, not O(N*M) times inside comprehension
         inst_set = set(instance_types)
         
         if self._mode == "budget":
@@ -202,8 +208,6 @@ class S2GCollator:
         )
         
         label_ids = label_enc["input_ids"].clone()
-        
-        # EFFICIENCY FIX: Masked fill avoids allocating intermediate boolean tensor arrays
         label_ids.masked_fill_(label_ids == self._tokenizer.pad_token_id, -100)
 
         return {

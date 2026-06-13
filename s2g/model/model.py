@@ -1,5 +1,5 @@
 """
-S2G Model wrapper for Pipeline and Joint models.
+S2G Model wrapper for Pipeline and BoundaryJoint models.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from transformers import (
 )
 
 from s2g.linearisation import (
-    AnyTokens, JOINT_TOKENS, PIPELINE_TOKENS, 
+    AnyTokens, S2GTokens, VARIANT_TO_TASKS,
     add_special_tokens_to_tokenizer, get_token_ids
 )
 
@@ -23,17 +23,16 @@ logger = logging.getLogger(__name__)
 
 class S2GModel:
     def __init__(self, model_name_or_path: str = "google/flan-t5-base", model_variant: str = "pipeline") -> None:
-        if model_variant not in {"pipeline", "joint"}:
-            raise ValueError(f"model_variant must be 'pipeline' or 'joint', got {model_variant!r}.")
+        if model_variant not in VARIANT_TO_TASKS:
+            raise ValueError(f"model_variant must be one of {list(VARIANT_TO_TASKS.keys())}, got {model_variant!r}.")
         
         self._variant = model_variant
-        self._tokens: AnyTokens = PIPELINE_TOKENS if model_variant == "pipeline" else JOINT_TOKENS
-
         logger.info("Loading tokenizer and model from %s", model_name_or_path)
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(model_name_or_path)
-        
-        # Load exactly as specified without auto-expanding to fp32 overhead
         self.model: PreTrainedModel = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path, torch_dtype="auto")
+
+        use_rejection = "<null>" in self.tokenizer.get_vocab()
+        self._tokens = S2GTokens(model_variant, use_rejection=use_rejection)
 
         num_added = add_special_tokens_to_tokenizer(self.tokenizer, self._tokens, self.model)
         logger.info("Variant=%s — added %d special tokens.", model_variant, num_added)
@@ -58,8 +57,6 @@ class S2GModel:
                 self._tokens, 
                 kwargs.get("num_beams", 1)
             )
-            
-            # Use LogitsProcessorList to append rather than destructively overwrite
             if "logits_processor" not in kwargs:
                 kwargs["logits_processor"] = LogitsProcessorList()
             elif not isinstance(kwargs["logits_processor"], LogitsProcessorList):
@@ -84,10 +81,12 @@ class S2GModel:
 
         instance = cls.__new__(cls)
         instance._variant = model_variant
-        instance._tokens = PIPELINE_TOKENS if model_variant == "pipeline" else JOINT_TOKENS
         
         instance.tokenizer = AutoTokenizer.from_pretrained(str(path))
         instance.model = AutoModelForSeq2SeqLM.from_pretrained(str(path), torch_dtype="auto")
+
+        use_rejection = "<null>" in instance.tokenizer.get_vocab()
+        instance._tokens = S2GTokens(model_variant, use_rejection=use_rejection)
 
         add_special_tokens_to_tokenizer(instance.tokenizer, instance._tokens)
         instance.token_ids = get_token_ids(instance.tokenizer, instance._tokens)

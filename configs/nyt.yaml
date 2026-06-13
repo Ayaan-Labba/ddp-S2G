@@ -38,7 +38,7 @@ validation:
   train_eval_percent_check: 0.09
   batch_size: 64
   early_stopping_patience: 4
-  early_stopping_metric: re_rel_strict_f1
+  early_stopping_metric: strict_f1
 
 generation:
   num_beams: 1
@@ -53,6 +53,7 @@ ssi:
   max_rel_types_in_prompt: null     
   random_prompt: false
   random_sel: false
+  use_rejection: false
 
 checkpoint:
   save_top_k: 3

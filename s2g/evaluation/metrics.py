@@ -33,8 +33,7 @@ def _macro_average(metrics: List[Dict[str, float]], prefix: str) -> Dict[str, fl
 
 def _corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefix: str) -> Dict[str, float]:
     """
-    EFFICIENCY FIX: Computes corpus-level PRF iteratively in O(1) memory.
-    Bypasses the O(N) memory explosion caused by allocating massive global tuple sets.
+    Computes corpus-level PRF iteratively in O(1) memory.
     """
     tp, p_len, g_len = 0, 0, 0
     
@@ -52,11 +51,11 @@ def _corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefi
 
 
 def corpus_rel_boundary_f1(all_predicted: List[List[Triplet]], all_gold: List[List[Triplet]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "rel_boundary")
+    return _corpus_prf(all_predicted, all_gold, "boundary")
 
 
 def corpus_rel_strict_f1(all_predicted: List[List[Quintuple]], all_gold: List[List[Quintuple]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "rel_strict")
+    return _corpus_prf(all_predicted, all_gold, "strict")
 
 
 def corpus_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[str]]) -> Dict[str, float]:
@@ -64,15 +63,15 @@ def corpus_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[s
 
 
 def corpus_ner_strict_f1(all_predicted: List[List[EntityMention]], all_gold: List[List[EntityMention]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "ner_strict")
+    return _corpus_prf(all_predicted, all_gold, "ner")
 
 
 def macro_rel_boundary_f1(all_predicted: List[List[Triplet]], all_gold: List[List[Triplet]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "rel_boundary") for p, g in zip(all_predicted, all_gold)], "rel_boundary")
+    return _macro_average([_instance_prf(p, g, "boundary") for p, g in zip(all_predicted, all_gold)], "boundary")
 
 
 def macro_rel_strict_f1(all_predicted: List[List[Quintuple]], all_gold: List[List[Quintuple]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "rel_strict") for p, g in zip(all_predicted, all_gold)], "rel_strict")
+    return _macro_average([_instance_prf(p, g, "strict") for p, g in zip(all_predicted, all_gold)], "strict")
 
 
 def macro_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[str]]) -> Dict[str, float]:
@@ -80,7 +79,7 @@ def macro_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[st
 
 
 def macro_ner_strict_f1(all_predicted: List[List[EntityMention]], all_gold: List[List[EntityMention]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "ner_strict") for p, g in zip(all_predicted, all_gold)], "ner_strict")
+    return _macro_average([_instance_prf(p, g, "ner") for p, g in zip(all_predicted, all_gold)], "ner")
 
 
 def compute_metrics_for_task(
@@ -94,29 +93,29 @@ def compute_metrics_for_task(
     all_pred_entity_mentions: Optional[List[List[EntityMention]]] = None, 
     all_gold_entity_mentions: Optional[List[List[EntityMention]]] = None,
 ) -> Dict[str, float]:
-    if task not in {"boundary", "ner", "re", "joint", "joint+"}: 
+    if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint"}: 
         raise ValueError(f"Unknown task {task!r}.")
     
     m = {}
-    if task in {"boundary", "ner", "joint+"}:
+    if task in {"boundary", "ner", "joint"}:
         if all_pred_entities is None or all_gold_entities is None:
             raise ValueError(f"'all_pred_entities' and 'all_gold_entities' must be provided for task '{task}'.")
         m.update(corpus_ner_boundary_f1(all_pred_entities, all_gold_entities))
         m.update(macro_ner_boundary_f1(all_pred_entities, all_gold_entities))
         
-    if task in {"ner", "joint+"}:
+    if task in {"ner", "joint"}:
         if all_pred_entity_mentions is None or all_gold_entity_mentions is None:
             raise ValueError(f"'all_pred_entity_mentions' and 'all_gold_entity_mentions' must be provided for task '{task}'.")
         m.update(corpus_ner_strict_f1(all_pred_entity_mentions, all_gold_entity_mentions))
         m.update(macro_ner_strict_f1(all_pred_entity_mentions, all_gold_entity_mentions))
         
-    if task in {"re", "joint", "joint+"}:
+    if task in {"re", "boundary_re", "boundary_joint", "joint"}:
         if all_pred_triplets is None or all_gold_triplets is None:
             raise ValueError(f"'all_pred_triplets' and 'all_gold_triplets' must be provided for task '{task}'.")
         m.update(corpus_rel_boundary_f1(all_pred_triplets, all_gold_triplets))
         m.update(macro_rel_boundary_f1(all_pred_triplets, all_gold_triplets))
         
-    if task in {"re", "joint+"}:
+    if task in {"re", "joint"}:
         if all_pred_quintuples is None or all_gold_quintuples is None:
             raise ValueError(f"'all_pred_quintuples' and 'all_gold_quintuples' must be provided for task '{task}'.")
         m.update(corpus_rel_strict_f1(all_pred_quintuples, all_gold_quintuples))

@@ -19,7 +19,7 @@ from transformers import (
 
 from s2g.data import S2GCollator, S2GDataset
 from s2g.evaluation import GenerateTextSamplesCallback, PeriodicCheckpointCallback, StepTrackingCallback, load_run_metadata
-from s2g.linearisation import JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer, VARIANT_TO_TASKS
 from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
 from s2g.training import S2GTrainer
 
@@ -55,26 +55,30 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    tokens = PIPELINE_TOKENS if cfg.model.model_variant == "pipeline" else JOINT_TOKENS
+    tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
 
-    tasks = cfg.model.tasks
-    if tasks is None:
-        tasks = ["ner", "re"] if cfg.model.model_variant == "pipeline" else ["joint", "joint+"]
-    else:
-        tasks = list(tasks)
+    tasks = VARIANT_TO_TASKS[cfg.model.model_variant]
 
     collator = S2GCollator(tokenizer, entity_schema, rel_schema, {
         "model_variant": cfg.model.model_variant, "max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length,
         "max_ent_types_in_prompt": cfg.ssi.max_ent_types_in_prompt or len(entity_schema), "max_rel_types_in_prompt": cfg.ssi.max_rel_types_in_prompt or len(rel_schema),
         "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
         "tasks": tasks, "mode": cfg.ssi.mode, "max_steps": cfg.train.max_steps,
+        "use_rejection": cfg.ssi.use_rejection,
     })
 
-    if cfg.model.model_variant == "pipeline":
-        callback_task = "re" if "re" in tasks else ("ner" if "ner" in tasks else "boundary")
-    else:
-        callback_task = "joint+" if "joint+" in tasks else "joint"
+    variant_to_callback_task = {
+        "pipeline": "re",
+        "boundary_pipeline": "boundary_re",
+        "joint": "joint",
+        "boundary_joint": "boundary_joint",
+        "boundary": "boundary",
+        "ner": "ner",
+        "re": "re",
+        "boundary_re": "boundary_re",
+    }
+    callback_task = variant_to_callback_task.get(cfg.model.model_variant, "re")
 
     callbacks = [
         StepTrackingCallback(collator), EarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
@@ -82,22 +86,20 @@ def main() -> None:
         GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, callback_task, cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
     ]
 
-    if cfg.model.model_variant == "pipeline":
-        if "re" in tasks:
-            best_metric = "re_rel_strict_f1" if "ner" in tasks else "re_rel_boundary_f1"
-        elif "ner" in tasks:
-            best_metric = "ner_ner_strict_f1"
-        else:
-            best_metric = "boundary_ner_boundary_f1"
-    else:
-        if "joint+" in tasks:
-            best_metric = "joint_plus_rel_strict_f1"
-        else:
-            best_metric = "joint_rel_boundary_f1"
+    variant_to_best_metric = {
+        "pipeline": "strict_f1",
+        "joint": "strict_f1",
+        "re": "boundary_f1",
+        "ner": "ner_f1",
+        "boundary_pipeline": "boundary_f1",
+        "boundary_joint": "boundary_f1",
+        "boundary_re": "boundary_f1",
+        "boundary": "ner_boundary_f1",
+    }
+    best_metric = variant_to_best_metric.get(cfg.model.model_variant, "strict_f1")
 
     trainer = S2GTrainer(
         scheduler_type=cfg.scheduler.type, model_variant=cfg.model.model_variant, tokens=tokens, entity_schema=entity_schema, rel_schema=rel_schema, train_eval_dataset=train_eval_dataset,
-        tasks=tasks,
         eval_cfg={"max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length, "eval_batch_size": cfg.validation.batch_size, "eval_beams": cfg.generation.num_beams},
         model=model, train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=collator, processing_class=tokenizer, callbacks=callbacks,
         args=Seq2SeqTrainingArguments(

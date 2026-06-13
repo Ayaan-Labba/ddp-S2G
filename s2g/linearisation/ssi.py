@@ -7,18 +7,18 @@ import random
 from typing import List, Optional, Set, Tuple
 
 from .special_tokens import (
-    AnyTokens, JointTokens, JOINT_TOKENS, PipelineTokens, PIPELINE_TOKENS,
+    AnyTokens, BoundaryJointTokens, BOUNDARY_JOINT_TOKENS, PipelineTokens, PIPELINE_TOKENS,
 )
 
 
 def build_ner_ssi(entity_types: List[str], random_order: bool = False, tok: AnyTokens = PIPELINE_TOKENS) -> str:
     types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-    return " ".join(f"{tok.type_} {t}" for t in types)
+    return " ".join(f"{tok.ner} {t}" for t in types)
 
 
 def build_rel_ssi(rel_types: List[str], random_order: bool = False, tok: AnyTokens = PIPELINE_TOKENS) -> str:
     types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-    return " ".join(f"{tok.rel} {t}" for t in types)
+    return " ".join(f"{tok.re} {t}" for t in types)
 
 
 def augment_ner_text(source_tokens: List[str], entity_spans: List[Tuple[int, int]], tok: AnyTokens = PIPELINE_TOKENS) -> str:
@@ -64,8 +64,6 @@ def find_token_span(source_tokens: List[str], span_text: str) -> Optional[Tuple[
         
     first_word = span_words[0]
     start_idx = 0
-    
-    # Fast C-level search instead of slicing the entire list iteratively
     while True:
         try:
             i = source_tokens.index(first_word, start_idx)
@@ -109,7 +107,7 @@ def build_ner_encoder_input(
     random_order: bool = False, tok: PipelineTokens = PIPELINE_TOKENS
 ) -> str:
     ssi = build_ner_ssi(entity_types, random_order, tok)
-    return f"{ssi} {tok.ner} {augment_ner_text(source_tokens, entity_spans, tok)}"
+    return f"{ssi} {tok.text} {augment_ner_text(source_tokens, entity_spans, tok)}"
 
 
 def build_re_encoder_input(
@@ -117,17 +115,17 @@ def build_re_encoder_input(
     random_order: bool = False, tok: PipelineTokens = PIPELINE_TOKENS
 ) -> str:
     ssi = build_rel_ssi(rel_types, random_order, tok)
-    return f"{ssi} {tok.re} {augment_re_text(source_tokens, entity_data, tok)}"
+    return f"{ssi} {tok.text} {augment_re_text(source_tokens, entity_data, tok)}"
 
 
-def build_joint_encoder_input(rel_types: List[str], text: str, random_order: bool = False, tok: JointTokens = JOINT_TOKENS) -> str:
-    return f"{build_rel_ssi(rel_types, random_order, tok)} {tok.joint} {text}"
+def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_order: bool = False, tok: BoundaryJointTokens = BOUNDARY_JOINT_TOKENS) -> str:
+    return f"{build_rel_ssi(rel_types, random_order, tok)} {tok.text} {text}"
 
 
-def build_joint_plus_encoder_input(
-    entity_types: List[str], rel_types: List[str], text: str, random_order: bool = False, tok: JointTokens = JOINT_TOKENS
+def build_joint_encoder_input(
+    entity_types: List[str], rel_types: List[str], text: str, random_order: bool = False, tok: BoundaryJointTokens = BOUNDARY_JOINT_TOKENS
 ) -> str:
     ent_ssi = build_ner_ssi(entity_types, random_order, tok)
     rel_ssi = build_rel_ssi(rel_types, random_order, tok)
     prefix = " ".join(filter(None, [ent_ssi, rel_ssi]))
-    return f"{prefix} {tok.joint_plus} {text}"
+    return f"{prefix} {tok.text} {text}"

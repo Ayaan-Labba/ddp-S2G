@@ -19,7 +19,6 @@ class ModelConfig:
     name: str = "google/flan-t5-base"
     pretrained_checkpoint: Optional[str] = None
     model_variant: str = "pipeline"
-    tasks: Optional[List[str]] = None
 
 @dataclass
 class TokenizationConfig:
@@ -57,7 +56,7 @@ class ValidationConfig:
     train_eval_percent_check: Optional[float] = None
     batch_size: int = 32
     early_stopping_patience: int = 10
-    early_stopping_metric: str = "re_rel_boundary_f1"
+    early_stopping_metric: str = "boundary_f1"
 
 @dataclass
 class GenerationConfig:
@@ -81,6 +80,7 @@ class SSIConfig:
     negative_max_end: int = 20
     random_prompt: bool = False
     random_sel: bool = False
+    use_rejection: bool = False
 
 @dataclass
 class CheckpointConfig:

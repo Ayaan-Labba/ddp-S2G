@@ -2,12 +2,12 @@
 Public API for the S2G encoder/decoder format.
 """
 from .special_tokens import (
-    AnyTokens, JointTokens, JOINT_TOKENS, PipelineTokens, PIPELINE_TOKENS,
-    add_special_tokens_to_tokenizer, get_token_ids,
+    AnyTokens, BoundaryJointTokens, BOUNDARY_JOINT_TOKENS, PipelineTokens, PIPELINE_TOKENS,
+    S2GTokens, add_special_tokens_to_tokenizer, get_token_ids, VARIANT_TO_TASKS,
 )
 from .ssi import (
     augment_ner_text, augment_re_text, build_boundary_encoder_input,
-    build_joint_encoder_input, build_joint_plus_encoder_input,
+    build_boundary_joint_encoder_input, build_joint_encoder_input,
     build_ner_encoder_input, build_ner_ssi, build_re_encoder_input,
     build_rel_ssi, find_all_token_spans, find_token_span,
 )
@@ -17,10 +17,10 @@ from .sel import (
 )
 
 __all__ = [
-    "AnyTokens", "JointTokens", "JOINT_TOKENS", "PipelineTokens", "PIPELINE_TOKENS",
-    "add_special_tokens_to_tokenizer", "get_token_ids",
+    "AnyTokens", "BoundaryJointTokens", "BOUNDARY_JOINT_TOKENS", "PipelineTokens", "PIPELINE_TOKENS",
+    "S2GTokens", "add_special_tokens_to_tokenizer", "get_token_ids", "VARIANT_TO_TASKS",
     "augment_ner_text", "augment_re_text", "build_boundary_encoder_input",
-    "build_joint_encoder_input", "build_joint_plus_encoder_input",
+    "build_boundary_joint_encoder_input", "build_joint_encoder_input",
     "build_ner_encoder_input", "build_ner_ssi", "build_re_encoder_input",
     "build_rel_ssi", "find_all_token_spans", "find_token_span",
     "EntityBlock", "RejectedItem", "Triplet", "build_sel", "extract_triplets",

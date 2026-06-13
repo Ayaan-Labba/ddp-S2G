@@ -12,12 +12,18 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
-from s2g.linearisation import JOINT_TOKENS, PIPELINE_TOKENS, AnyTokens, extract_triplets, parse_sel
+from s2g.linearisation import S2GTokens, AnyTokens, extract_triplets, parse_sel
 
 logger = logging.getLogger(__name__)
 
-_TASK_TO_KEY = {"boundary": "boundary", "ner": "ner", "re": "re", "joint": "joint", "joint+": "joint_plus"}
-_TASK_TO_TOK = {"boundary": PIPELINE_TOKENS, "ner": PIPELINE_TOKENS, "re": PIPELINE_TOKENS, "joint": JOINT_TOKENS, "joint+": JOINT_TOKENS}
+_TASK_TO_KEY = {
+    "boundary": "boundary",
+    "ner": "ner",
+    "re": "re",
+    "boundary_re": "boundary_re",
+    "boundary_joint": "boundary_joint",
+    "joint": "joint"
+}
 
 
 class StepTrackingCallback(TrainerCallback):
@@ -38,7 +44,8 @@ class GenerateTextSamplesCallback(TrainerCallback):
         self.tokenizer = tokenizer
         self.sample_batch = sample_batch
         self.collator = collator
-        self._task, self._task_key, self._tok = task, _TASK_TO_KEY[task], _TASK_TO_TOK[task]
+        self._task, self._task_key = task, _TASK_TO_KEY[task]
+        self._tok = collator._tok
         self.interval, self.eval_beams, self.max_target_length, self._last_logged = interval, eval_beams, max_target_length, -1
 
     def on_step_end(
@@ -87,8 +94,6 @@ class GenerateTextSamplesCallback(TrainerCallback):
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
         g_ids = labels.clone()
         g_ids.masked_fill_(g_ids == -100, pad_id)
-        
-        # EFFICIENCY FIX: Batch decode utilizes fast Rust backend rather than looping in Python
         pred_texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=False)
         gold_texts = self.tokenizer.batch_decode(g_ids, skip_special_tokens=False)
 

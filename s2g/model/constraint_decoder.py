@@ -41,33 +41,76 @@ class Trie:
 
 
 def _extract_ssi_labels(
-        source_row: List[int], delimiter_to_task: Dict[int, str], 
-        type_id: int, rel_id: int, eos_id: int, pad_id: int
+        source_row: List[int], 
+        tokens: AnyTokens,
+        tid: Dict[str, int],
+        eos_id: int, 
+        pad_id: int
     ) -> Tuple[str, List[List[int]], List[List[int]]]:
-    ent_seqs, rel_seqs, curr, curr_kind, task = [], [], [], None, "boundary"
+    ent_seqs, rel_seqs, curr = [], [], []
+    curr_kind = None
+    seen_ner = False
+    seen_re = False
+    seen_bound = False
+
+    bound_id = tid.get("bound")
+    ner_id = tid.get("ner")
+    re_id = tid.get("re")
+    text_id = tid.get("text")
 
     def flush():
         if curr and curr_kind: 
-            (ent_seqs if curr_kind == "type" else rel_seqs).append(list(curr))
+            (ent_seqs if curr_kind == "ner" else rel_seqs).append(list(curr))
         curr.clear()
 
-    for tid in source_row:
-        if tid in {pad_id, eos_id} | set(delimiter_to_task.keys()):
+    for token_id in source_row:
+        if token_id in {pad_id, eos_id, text_id}:
             flush()
-            if tid in delimiter_to_task: 
-                task = delimiter_to_task[tid]
             break
-        if tid in {type_id, rel_id}:
+        elif bound_id is not None and token_id == bound_id:
+            seen_bound = True
             flush()
-            curr_kind = "type" if tid == type_id else "rel"
-        elif curr_kind: 
-            curr.append(int(tid))
+            break
+        elif ner_id is not None and token_id == ner_id:
+            flush()
+            curr_kind = "ner"
+            seen_ner = True
+        elif re_id is not None and token_id == re_id:
+            flush()
+            curr_kind = "re"
+            seen_re = True
+        elif curr_kind:
+            curr.append(int(token_id))
+
+    if seen_bound:
+        task = "boundary"
+    elif seen_ner and seen_re:
+        task = "joint"
+    elif seen_ner:
+        task = "ner"
+    elif seen_re:
+        from s2g.linearisation.special_tokens import PipelineTokens
+        if isinstance(tokens, PipelineTokens):
+            task = "re"
+        else:
+            task = "boundary_joint"
+    else:
+        task = "boundary"
 
     return task, ent_seqs, rel_seqs
 
 
 class FSMState(Enum):
-    START, ENT_SPAN, TYPE_LABEL, REL_LABEL, TAIL_SPAN, INTER, NULL_LABEL, END = auto(), auto(), auto(), auto(), auto(), auto(), auto(), auto()
+    START = auto()
+    ENT_SPAN = auto()
+    TYPE_LABEL = auto()
+    REL_LABEL = auto()
+    TAIL_SPAN = auto()
+    TAIL_TYPE_LABEL = auto()
+    NEST = auto()
+    INTER = auto()
+    NULL_LABEL = auto()
+    END = auto()
 
 @dataclass
 class _HypState:
@@ -90,14 +133,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         tid = get_token_ids(tokenizer, tokens)
         self.ent_start_id, self.ent_end_id = tid["ent_start"], tid["ent_end"]
         self.type_id, self.rel_id, self.tail_id, self.null_id = tid["type_"], tid["rel"], tid["tail"], tid["null"]
+        self.head_id, self.nest_id = tid["head"], tid["nest"]
         self.eos_id, self.pad_id = tokenizer.eos_token_id, tokenizer.pad_token_id or 0
 
-        delimiter_to_task = {
-            tid[f]: n for f, n in [
-                ("bound", "boundary"), ("ner", "ner"), ("re", "re"), 
-                ("joint", "joint"), ("joint_plus", "joint+")
-            ] if f in tid
-        }
         self._special_ids = frozenset(tid.values()) | {self.eos_id, self.pad_id}
 
         self._source_token_sets, self._source_lists, self._token_to_positions = [], [], []
@@ -110,31 +148,37 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 pos_map.setdefault(token, []).append(i)
             self._token_to_positions.append(pos_map)
 
-        self._tasks, self._ent_type_tries, self._rel_tries, self._null_tries = [], [], [], []
+        self._tasks, self._ent_type_tries, self._rel_tries, self._null_tries, self._tail_type_tries = [], [], [], [], []
         for b in range(self._batch_size):
             task, e_seqs, r_seqs = _extract_ssi_labels(
-                source_ids[b].tolist(), delimiter_to_task, 
-                self.type_id, self.rel_id, self.eos_id, self.pad_id
+                source_row=source_ids[b].tolist(), 
+                tokens=tokens, 
+                tid=tid, 
+                eos_id=self.eos_id, 
+                pad_id=self.pad_id
             )
             self._tasks.append(task)
             
             self._ent_type_tries.append(
-                Trie(e_seqs, self._get_inter_tokens(task) if task == "ner" else ({self.rel_id} | self._get_inter_tokens(task)))
-                if task in {"ner", "joint+"} else None
+                Trie(e_seqs, {self.rel_id} if task == "joint" else self._get_inter_tokens(task))
+                if task in {"ner", "joint"} else None
             )
-            self._rel_tries.append(Trie(r_seqs, {self.tail_id}) if task in {"re", "joint", "joint+"} else None)
+            self._tail_type_tries.append(
+                Trie(e_seqs, {self.nest_id, self.head_id, self.null_id, self.eos_id})
+                if task == "joint" else None
+            )
+            self._rel_tries.append(Trie(r_seqs, {self.tail_id}) if task in {"re", "boundary_joint", "joint"} else None)
             
             null_map = {
-                "ner": (e_seqs, {self.type_id, self.eos_id}), 
-                "re": (r_seqs, {self.rel_id, self.eos_id}), 
-                "joint": (r_seqs, {self.rel_id, self.eos_id}), 
-                "joint+": (e_seqs + r_seqs, {self.type_id, self.rel_id, self.eos_id})
+                "ner": (e_seqs, {self.null_id, self.eos_id}), 
+                "re": (r_seqs, {self.null_id, self.eos_id}), 
+                "boundary_joint": (r_seqs, {self.null_id, self.eos_id}), 
+                "joint": (e_seqs + r_seqs, {self.null_id, self.eos_id})
             }
             n_seqs, n_sents = null_map.get(task, ([], {self.eos_id}))
             self._null_tries.append(Trie(n_seqs, n_sents))
 
         self._disallowed = None
-        # Cache tracks states dynamically, completely eliminating O(L^2) step rebuilds
         self._state_cache: Dict[Tuple[int, ...], _HypState] = {}
 
     def _batch_idx(self, hyp_idx: int) -> int: 
@@ -154,17 +198,17 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _get_inter_tokens(self, task: str) -> Set[int]:
         if task == "boundary":
             return {self.ent_start_id, self.eos_id}
+        if task in {"re", "boundary_joint", "joint"}:
+            return {self.head_id, self.null_id, self.eos_id}
         return {self.ent_start_id, self.null_id, self.eos_id}
 
     def _ent_span_exits(self, task: str) -> FrozenSet[int]:
         if task == "boundary":
             return frozenset(self._get_inter_tokens(task))
-        if task == "joint":
+        if task in {"boundary_joint", "re"}:
             return frozenset({self.rel_id} | self._get_inter_tokens(task))
-        if task in {"ner", "joint+"}:
+        if task in {"ner", "joint"}:
             return frozenset({self.type_id})
-        if task == "re":
-            return frozenset({self.rel_id})
         return frozenset()
 
     def _transition(self, state: _HypState, token_id: int) -> None:
@@ -172,7 +216,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             state.fsm_state = FSMState.END
         elif token_id == self.pad_id and state.fsm_state == FSMState.START:
             pass  
-        elif token_id == self.ent_start_id: 
+        elif token_id in {self.ent_start_id, self.head_id}: 
             state.fsm_state, state.span_tokens, state.label_prefix = FSMState.ENT_SPAN, [], []
         elif token_id == self.ent_end_id: 
             state.fsm_state, state.span_tokens, state.label_prefix = FSMState.INTER, [], []
@@ -180,39 +224,59 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
         elif token_id == self.null_id: 
             state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
+        elif token_id == self.nest_id:
+            state.fsm_state = FSMState.NEST
         elif token_id in {self.type_id, self.rel_id}:
             if state.fsm_state != FSMState.NULL_LABEL: 
-                state.fsm_state = FSMState.TYPE_LABEL if token_id == self.type_id else FSMState.REL_LABEL
+                if token_id == self.type_id:
+                    state.fsm_state = FSMState.TAIL_TYPE_LABEL if state.fsm_state == FSMState.TAIL_SPAN else FSMState.TYPE_LABEL
+                else:
+                    state.fsm_state = FSMState.REL_LABEL
                 if token_id == self.rel_id: 
                     state.span_tokens = []
             state.label_prefix = []
         elif state.fsm_state in {FSMState.ENT_SPAN, FSMState.TAIL_SPAN}: 
             state.span_tokens.append(token_id)
-        elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}: 
+        elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.TAIL_TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}: 
             state.label_prefix.append(token_id)
 
     def _allowed_tokens(self, state: _HypState, hyp_idx: int) -> FrozenSet[int]:
         task, b_idx = self._tasks[self._batch_idx(hyp_idx)], self._batch_idx(hyp_idx)
         
         if state.fsm_state == FSMState.START: 
+            if task in {"re", "boundary_joint", "joint"}:
+                return frozenset({self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
             return frozenset({self.ent_start_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
             
         if state.fsm_state == FSMState.ENT_SPAN: 
             return frozenset(self._source_copy_next(b_idx, state.span_tokens) | self._ent_span_exits(task)) or frozenset({self.eos_id})
             
-        if state.fsm_state == FSMState.TAIL_SPAN: 
-            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.rel_id} | self._get_inter_tokens(task)) or frozenset({self.eos_id})
+        if state.fsm_state == FSMState.TAIL_SPAN:
+            exits = set()
+            if task == "joint":
+                exits.add(self.type_id)
+            elif task in {"re", "boundary_joint"}:
+                exits.update({self.nest_id, self.head_id, self.null_id, self.eos_id})
+            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
             
         if state.fsm_state == FSMState.TYPE_LABEL: 
             return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(self._get_inter_tokens(task))
             
+        if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
+            return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset({self.nest_id, self.head_id, self.null_id, self.eos_id})
+
         if state.fsm_state == FSMState.REL_LABEL: 
             return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
             
+        if state.fsm_state == FSMState.NEST:
+            return frozenset({self.rel_id})
+
         if state.fsm_state == FSMState.NULL_LABEL: 
             return self._null_tries[b_idx].get_valid_next(state.label_prefix)
             
         if state.fsm_state == FSMState.INTER: 
+            if task in {"re", "boundary_joint", "joint"}:
+                return frozenset({self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
             return frozenset({self.ent_start_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
         
         return frozenset({self.eos_id, self.pad_id})
@@ -230,8 +294,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             seq_tuple = tuple(seq)
             prev_seq_tuple = tuple(seq[:-1])
             last_token = seq[-1]
-            
-            # EFFICIENCY FIX: O(1) state lookup instead of O(L) token replay
             if prev_seq_tuple in self._state_cache:
                 state = self._state_cache[prev_seq_tuple].clone()
                 self._transition(state, last_token)
@@ -244,8 +306,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
             self._disallowed.fill_(True)
             valid_tokens = [t for t in self._allowed_tokens(state, h) if t < vocab_size]
-            
-            # EFFICIENCY FIX: Indexed boolean mask mapping avoids explicit tensor constructor overhead
             if valid_tokens:
                 self._disallowed[valid_tokens] = False
                 

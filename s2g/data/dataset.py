@@ -7,8 +7,6 @@ import logging
 import mmap
 from pathlib import Path
 from typing import Optional, Union
-
-# Fast-path JSON parser bypasses Python GIL bottlenecks
 try:
     import orjson as json
 except ImportError:
