@@ -60,21 +60,6 @@ class S2GCollator:
         self._step = value
 
     def __call__(self, batch: List[Dict]) -> Dict[str, Any]:
-        return self._collate_pipeline(batch) if self._variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else self._collate_boundary_joint(batch)
-
-    def _collate_pipeline(self, batch: List[Dict]) -> Dict[str, Any]:
-        tasks = {tk: ([], []) for tk in self._task_keys}
-        for inst in batch:
-            blocks = organize_by_entity(inst["entities"], inst["relations"])
-            for tk in self._task_keys:
-                func = getattr(self, f"_prepare_{tk}")
-                enc, dec = func(inst, blocks)
-                tasks[tk][0].append(enc)
-                tasks[tk][1].append(dec)
-                
-        return {k: v for tk, (enc, dec) in tasks.items() for k, v in self._tokenize_task(tk, enc, dec).items()}
-
-    def _collate_boundary_joint(self, batch: List[Dict]) -> Dict[str, Any]:
         tasks = {tk: ([], []) for tk in self._task_keys}
         for inst in batch:
             blocks = organize_by_entity(inst["entities"], inst["relations"])

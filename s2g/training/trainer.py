@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -177,7 +177,20 @@ class S2GTrainer(Seq2SeqTrainer):
             
             all_metrics = super().evaluate(eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix, **gen_kwargs)
             if self._train_eval_dataset and metric_key_prefix == "eval":
-                train_metrics = super().evaluate(eval_dataset=self._train_eval_dataset, ignore_keys=ignore_keys, metric_key_prefix="train", **gen_kwargs)
+                # Temporarily remove EarlyStoppingCallback to prevent it from disabling early stopping
+                # because the metric prefix for train eval is "train" instead of "eval"
+                early_stopping_callbacks = [
+                    cb for cb in self.callback_handler.callbacks if cb.__class__.__name__ == "EarlyStoppingCallback"
+                ]
+                for cb in early_stopping_callbacks:
+                    self.callback_handler.callbacks.remove(cb)
+                
+                try:
+                    train_metrics = super().evaluate(eval_dataset=self._train_eval_dataset, ignore_keys=ignore_keys, metric_key_prefix="train", **gen_kwargs)
+                finally:
+                    # Restore the callbacks
+                    for cb in early_stopping_callbacks:
+                        self.callback_handler.callbacks.append(cb)
                 all_metrics.update(train_metrics)
             return all_metrics
 
@@ -199,6 +212,9 @@ class S2GTrainer(Seq2SeqTrainer):
 
         if dist.is_initialized():
             dist.barrier()
+            
+        if metric_key_prefix == "eval":
+            self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, all_metrics)
             
         return all_metrics
         

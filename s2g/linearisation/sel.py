@@ -105,8 +105,6 @@ def build_sel(
             parts.append(" ".join(ent_parts))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
-            for rel in rels:
-                ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
             parts.append(" ".join(ent_parts))
 
     if task != "boundary" and use_rejection:
