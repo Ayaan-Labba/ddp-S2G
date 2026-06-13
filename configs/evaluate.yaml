@@ -12,15 +12,15 @@
 # =============================================================================
 
 model:
-  pretrained_checkpoint: null       # Required: path to trained checkpoint dir
-  model_variant: pipeline           # Auto-detected from model_variant.txt if present
+  pretrained_checkpoint: outputs/finetune/joint-base-conll04/best_model       # Required: path to trained checkpoint dir
+  model_variant: joint           # Auto-detected from model_variant.txt if present
 
 tokenization:
-  max_source_length: 300
-  max_target_length: 150
+  max_source_length: 240
+  max_target_length: 180
 
 generation:
-  num_beams: 4
+  num_beams: 3
   length_penalty: 0.0
   no_repeat_ngram_size: 0
   early_stopping: false
@@ -30,17 +30,20 @@ evaluation:
   split: test                       # "val" or "test"
 
 validation:
-  batch_size: 32                    # Inference batch size
+  batch_size: 128                    # Inference batch size
 
 train:
   seed: 0
 
+ssi:
+  ssi_prompt: natural
+
 data:
-  data_dir: null
-  schema_file: null
-  entity_schema_file: null
-  output_dir: outputs/eval
+  data_dir: data/conll04
+  schema_file: data/conll04/relation.schema
+  entity_schema_file: data/conll04/entity.schema
+  output_dir: outputs/finetune/joint-base-conll04/eval
 
 hardware:
   num_workers: 4
-  gpu_ids: null
+  gpu_ids: [0]
