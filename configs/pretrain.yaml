@@ -63,16 +63,12 @@ ssi:                                # Schema-Sensitive-Input dynamic constructio
   negative_rate_end: 1.0            # Bernoulli prob. for selected negatives at step T
   negative_max_start: 30            # k(0): max negatives drawn from pool at training start
   negative_max_end: 30              # k(T): max negatives drawn from pool at training end
-  max_types_in_prompt: 30           # Hard cap on SSI prompt size; clamps k(t) when it would overflow
   random_prompt: false              # Shuffle SSI type order
   random_sel: false                 # Shuffle SEL entity / relation order
   use_rejection: false
 
 checkpoint:
-  save_top_k: 3                     # Keep top-k by `metric` below
-  metric: val_f1
-  mode: max                                                     # Higher is better for F1
-  save_last: true                                               # Always keep the latest
+  save_top_k: 3                     # Keep top-k checkpoints
   every_n_steps: 6000                                          # Resumable safety-net checkpoints
   resume_from: outputs/pretrain-large-v1/checkpoint-66000      # Path to checkpoint dir; null = fresh start
 
