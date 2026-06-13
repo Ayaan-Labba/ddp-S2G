@@ -81,9 +81,8 @@ class S2GCollator:
         pos_ent, neg_ent = self._sample_types(
             inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
         )
-        spans = [(int(e["offset"][0]), int(e["offset"][1])) for e in inst["entities"]] if "boundary" in self._tasks else []
         enc = build_ner_encoder_input(
-            pos_ent + neg_ent, inst["tokens"], spans, random_order=self._random_prompt, tok=self._tok
+            pos_ent + neg_ent, inst["tokens"], [], random_order=self._random_prompt, tok=self._tok
         )
         allowed_ents = set(pos_ent)
         filtered_blocks = [b for b in blocks if b.get("type") in allowed_ents]
