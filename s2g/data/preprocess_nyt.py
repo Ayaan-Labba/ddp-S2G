@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Tuple, Set
 
 import yaml
 
+from s2g.linearisation import build_sel, organize_by_entity
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,73 +35,69 @@ def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dic
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 
-def find_sublist_index(sub: List[str], full: List[str]) -> int:
-    """Finds the starting index of a sublist within a full list."""
-    n = len(sub)
-    for i in range(len(full) - n + 1):
-        if full[i:i+n] == sub:
-            return i
-    return -1
-
-
 def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Optional[Dict]:
-    if not raw.get("entityMentions"): 
+    tokens = raw.get("tokens")
+    if not tokens or not raw.get("spo_details"):
         return None
     
-    # 1. Tokenize the raw sentence string
-    sent_text = raw.get("sentText", "")
-    tokens = sent_text.split()
+    text = " ".join(tokens)
+    entities_registry: Dict[Tuple[int, int], Dict] = {}
+    relations = []
+
+    # Zipping spo_list and spo_details together to align data perfectly
+    list_relations = zip(raw['spo_list'], raw['spo_details'])
     
-    entities = []
-    entity_text_to_idx = {}
+    for relation, details in list_relations:
+        # details layout: [head_start, head_end, head_type, rel_type, tail_start, tail_end, tail_type]
+        h_start, h_end, h_type = int(details[0]), int(details[1]), details[2]
+        t_start, t_end, t_type = int(details[4]), int(details[5]), details[6]
 
-    # 2. Extract Entities and calculate exact token offsets
-    for raw_ent in raw["entityMentions"]:
-        e_text = raw_ent["text"]
-        e_tokens = e_text.split()
-        
-        start_idx = find_sublist_index(e_tokens, tokens)
-        
-        if start_idx != -1:
-            end_idx = start_idx + len(e_tokens)
-            mapped_type = entity_map.get(raw_ent["label"], raw_ent["label"])
-            entities.append({
-                "text": " ".join(tokens[start_idx:end_idx]),
-                "offset": [start_idx, end_idx],
-                "type": mapped_type
-            })
-            # Map the exact string to its entity ID for relation matching
-            # Note: Overwrites duplicate strings, generally acceptable for NYT-raw
-            entity_text_to_idx[e_text] = len(entities) - 1
+        # Process and track unique head entities
+        h_key = (h_start, h_end)
+        if h_key not in entities_registry:
+            entities_registry[h_key] = {
+                "text": " ".join(tokens[h_start:h_end]),
+                "offset": [h_start, h_end],
+                "type": entity_map.get(h_type, h_type)
+            }
 
+        # Process and track unique tail entities
+        t_key = (t_start, t_end)
+        if t_key not in entities_registry:
+            entities_registry[t_key] = {
+                "text": " ".join(tokens[t_start:t_end]),
+                "offset": [t_start, t_end],
+                "type": entity_map.get(t_type, t_type)
+            }
+
+        head_obj = entities_registry[h_key]
+        tail_obj = entities_registry[t_key]
+
+        # Extract relation configurations
+        raw_rel_type = relation[1].split("/")[-1]
+        mapped_rel_type = relation_map.get(raw_rel_type, raw_rel_type)
+
+        # Do not include the flipping or REBEL mapping.
+        relations.append({"head": head_obj, "tail": tail_obj, "type": mapped_rel_type})
+
+    # Transform our key registry back into an ordered entities list
+    entities = sorted(entities_registry.values(), key=lambda e: e["offset"])
     if not entities:
         return None
 
-    # 3. Extract Relations and map text mentions back to fully dereferenced entities
-    relations = []
-    for raw_rel in raw.get("relationMentions", []):
-        head_text = raw_rel.get("em1Text")
-        tail_text = raw_rel.get("em2Text")
-        
-        if head_text in entity_text_to_idx and tail_text in entity_text_to_idx:
-            # Dereference the integer indices to capture the complete entity sub-dictionary
-            head_idx = entity_text_to_idx[head_text]
-            tail_idx = entity_text_to_idx[tail_text]
-            raw_rel_type = raw_rel["label"].split("/")[-1]
-            mapped_rel_type = relation_map.get(raw_rel_type, raw_rel_type)
-            relations.append({
-                "head": entities[head_idx],
-                "tail": entities[tail_idx],
-                "type": mapped_rel_type
-            })
+    types = sorted({r["type"] for r in relations})
+    entity_blocks = organize_by_entity(entities, relations)
+    sel = build_sel(entity_blocks, "joint")
 
     return {
-        "text": " ".join(tokens), 
-        "tokens": tokens, 
+        "text": text,
+        "tokens": tokens,
         "entities": entities, 
         "relations": relations,
         "entity_types": sorted({e["type"] for e in entities}), 
-        "rel_types": sorted({r["type"] for r in relations}),
+        "rel_types": types,
+        "types": types,
+        "sel": sel,
     }
 
 
@@ -112,11 +110,9 @@ def process_split(
     skipped, written = 0, 0
     
     with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
-        # NYT-raw uses JSONL format natively (one JSON object per line)
-        for line in fin:
-            if not line.strip(): continue
-            raw = json.loads(line)
-            
+        # NYT-multi datasets utilize entire top-level arrays
+        data = json.load(fin)
+        for raw in data:
             if inst := convert_instance(raw, entity_map, relation_map):
                 fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
                 seen_ent.update(inst["entity_types"])
@@ -157,18 +153,18 @@ def main() -> None:
 
     all_ent, all_rel = [], []
     
-    # Updated file mapping to match your dataset keys
+    # Standard NYT-multi split naming convention
     file_map = {
-        "raw_train.json": "train.jsonl", 
-        "raw_valid.json": "val.jsonl", 
-        "raw_test.json": "test.jsonl"
+        "train.json": "train.jsonl", 
+        "dev.json": "val.jsonl", 
+        "test.json": "test.jsonl"
     }
     
     for in_name, out_name in file_map.items():
         if (in_path := input_dir / in_name).exists():
             e, r = process_split(in_path, output_dir / out_name, entity_map, relation_map)
-            if in_name == "raw_train.json": 
-                all_ent, all_rel = e, r # Prefer training schema
+            if in_name == "train.json": 
+                all_ent, all_rel = e, r
 
     _write_schema(output_dir / "entity.schema", all_ent)
     _write_schema(output_dir / "relation.schema", all_rel)
