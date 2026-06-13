@@ -19,17 +19,21 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from s2g.linearisation import BOUNDARY_JOINT_TOKENS, PIPELINE_TOKENS, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
 from s2g.scripts.config_utils import load_config
 
 logger = logging.getLogger(__name__)
 
 # Tasks exercised per model variant — must match compute_loss and _run_generation
 _TRAIN_TASK_KEYS: Dict[str, Tuple[str, ...]] = {
+    "boundary": ("boundary",),
+    "ner": ("ner",),
+    "re": ("re",),
+    "boundary_re": ("boundary_re",),
     "pipeline": ("ner", "re"),
-    "untyped pipeline": ("boundary", "re"),
-    "boundary_joint": ("joint",),
-    "untyped boundary_joint": ("boundary_joint",),
+    "boundary_pipeline": ("boundary", "boundary_re"),
+    "boundary_joint": ("boundary_joint",),
+    "joint": ("joint",),
 }
 
 def _mb(n_bytes: int) -> float:
@@ -315,7 +319,7 @@ def main() -> None:
     logger.info("Loading model and tokenizer: %s", cfg.model.name)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    tokens    = PIPELINE_TOKENS if cfg.model.model_variant in {"pipeline", "untyped pipeline"} else BOUNDARY_JOINT_TOKENS
+    tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
     model.to(device)
 
