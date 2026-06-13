@@ -1,5 +1,5 @@
 """
-Pre-processing script for raw NYT dataset (from the ReLiK repo) into S2G fine-tuning format.
+Pre-processing script for the NYT-multi dataset (from the JointRE repo) into S2G fine-tuning format.
 """
 from __future__ import annotations
 
