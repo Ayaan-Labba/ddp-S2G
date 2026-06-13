@@ -2,7 +2,7 @@
 s2g_env/
 *__pycache__/
 .vscode/
-cleanup.py
+slurm_shells/
 
 # Data
 /data/
