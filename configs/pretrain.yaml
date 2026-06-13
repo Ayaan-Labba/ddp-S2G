@@ -66,6 +66,7 @@ ssi:                                # Schema-Sensitive-Input dynamic constructio
   random_prompt: false              # Shuffle SSI type order
   random_sel: false                 # Shuffle SEL entity / relation order
   use_rejection: false
+  ssi_prompt: ssi
 
 checkpoint:
   save_top_k: 3                     # Keep top-k checkpoints

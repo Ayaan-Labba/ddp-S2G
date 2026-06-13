@@ -44,12 +44,12 @@ def _ensure_nltk_punkt() -> None:
     _NLTK_READY = True
 
 
-def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src, max_tgt, device, constraint_decoding=False) -> str:
+def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src, max_tgt, device, constraint_decoding=False, entity_schema=None, rel_schema=None) -> str:
     tok_out = tokenizer([encoder_input], max_length=max_src, truncation=True, return_tensors="pt").to(device, non_blocking=True)
     gen_kwargs = {**tok_out, "num_beams": num_beams, "max_length": max_tgt, "length_penalty": 0.0, "no_repeat_ngram_size": 0, "early_stopping": False}
     
     if constraint_decoding: 
-        gen_kwargs["logits_processor"] = [build_constraint_processor(tokenizer, tok_out["input_ids"], tokens, num_beams)]
+        gen_kwargs["logits_processor"] = [build_constraint_processor(tokenizer, tok_out["input_ids"], tokens, num_beams, entity_schema=entity_schema, rel_schema=rel_schema)]
 
     dtype = next(model.parameters()).dtype
     ctx = torch.autocast(device.type, dtype) if dtype in {torch.bfloat16, torch.float16} and device.type == "cuda" else contextlib.nullcontext()
@@ -63,7 +63,7 @@ def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src
     return " ".join(raw.split())
 
 
-def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None) -> Dict[str, Any]:
+def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None, ssi_prompt: str="ssi") -> Dict[str, Any]:
     _ensure_nltk_punkt()
     device = device or next(model.parameters()).device
     src_toks = nltk.word_tokenize(text)
@@ -77,7 +77,7 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
 
     b_ents = []
     if use_boundary:
-        b_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_encoder_input(text, tok=tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        b_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_encoder_input(text, tok=tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
     
     n_ents = []
     if use_ner:
@@ -85,7 +85,7 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
             n_spans = list(dict.fromkeys(s for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
         else:
             n_spans = []
-        n_ents, _ = parse_sel(_generate_single(model, tokenizer, build_ner_encoder_input(entity_schema, src_toks, n_spans, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        n_ents, _ = parse_sel(_generate_single(model, tokenizer, build_ner_encoder_input(entity_schema, src_toks, n_spans, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
 
     r_ents = []
     if use_re or use_boundary_re:
@@ -95,7 +95,7 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
             r_entities = list(dict.fromkeys((*s, "") for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
         else:
             r_entities = []
-        r_ents, _ = parse_sel(_generate_single(model, tokenizer, build_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        r_ents, _ = parse_sel(_generate_single(model, tokenizer, build_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
 
     res = {"text": text, "tokens": src_toks}
     if use_boundary:
@@ -107,7 +107,7 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
     return res
 
 
-def extract_boundary_joint(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None) -> Dict[str, Any]:
+def extract_boundary_joint(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None, ssi_prompt: str="ssi") -> Dict[str, Any]:
     device = device or next(model.parameters()).device
     if tasks is None:
         tasks = ["boundary_joint", "joint"]
@@ -116,10 +116,10 @@ def extract_boundary_joint(text: str, model: Any, tokenizer: Any, entity_schema:
 
     res = {"text": text}
     if use_boundary_joint:
-        j_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_joint_encoder_input(rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        j_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_joint_encoder_input(rel_schema, text, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
         res["boundary_joint_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(j_ents)]
     if use_joint:
-        jp_ents, _ = parse_sel(_generate_single(model, tokenizer, build_joint_encoder_input(entity_schema, rel_schema, text, False, tokens), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding), tok=tokens)
+        jp_ents, _ = parse_sel(_generate_single(model, tokenizer, build_joint_encoder_input(entity_schema, rel_schema, text, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
         res["joint"] = {"entities": [{"text": e["text"], "type": e.get("type")} for e in jp_ents], "triplets": [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(jp_ents)]}
     return res
 
@@ -127,7 +127,7 @@ def extract_boundary_joint(text: str, model: Any, tokenizer: Any, entity_schema:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", required=True); parser.add_argument("--schema_file", required=True); parser.add_argument("--entity_schema_file", default=None); parser.add_argument("--input_file", default=None); parser.add_argument("--output_file", default=None); parser.add_argument("--constraint_decoding", default="false"); parser.add_argument("--num_beams", type=int, default=4); parser.add_argument("--max_source_length", type=int, default=300); parser.add_argument("--max_target_length", type=int, default=200)
+    parser.add_argument("--checkpoint", required=True); parser.add_argument("--schema_file", required=True); parser.add_argument("--entity_schema_file", default=None); parser.add_argument("--input_file", default=None); parser.add_argument("--output_file", default=None); parser.add_argument("--constraint_decoding", default="false"); parser.add_argument("--num_beams", type=int, default=4); parser.add_argument("--max_source_length", type=int, default=300); parser.add_argument("--max_target_length", type=int, default=200); parser.add_argument("--ssi_prompt", default="ssi", choices=["ssi", "natural", "false"])
     args = parser.parse_args()
 
     tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint)
@@ -148,7 +148,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
 
-    kwargs = {"model": model, "tokenizer": tokenizer, "entity_schema": load_entity_schema(args.entity_schema_file), "rel_schema": load_schema(args.schema_file), "tokens": tokens, "num_beams": args.num_beams, "max_source_length": args.max_source_length, "max_target_length": args.max_target_length, "device": device, "constraint_decoding": args.constraint_decoding.lower() in ("true", "1", "yes"), "tasks": tasks}
+    kwargs = {"model": model, "tokenizer": tokenizer, "entity_schema": load_entity_schema(args.entity_schema_file), "rel_schema": load_schema(args.schema_file), "tokens": tokens, "num_beams": args.num_beams, "max_source_length": args.max_source_length, "max_target_length": args.max_target_length, "device": device, "constraint_decoding": args.constraint_decoding.lower() in ("true", "1", "yes"), "tasks": tasks, "ssi_prompt": args.ssi_prompt}
     extract_fn = extract_pipeline if model_variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else extract_boundary_joint
 
     if args.input_file:

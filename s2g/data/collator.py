@@ -36,6 +36,7 @@ class S2GCollator:
         self._random_prompt = config.get("random_prompt", False)
         self._random_sel = config.get("random_sel", False)
         self._use_rejection = config.get("use_rejection", False)
+        self._ssi_prompt = config.get("ssi_prompt", "ssi")
         self._tok: AnyTokens = S2GTokens(self._variant, use_rejection=self._use_rejection)
         self._step = 0
 
@@ -73,7 +74,7 @@ class S2GCollator:
 
     def _prepare_boundary(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         return (
-            build_boundary_encoder_input(inst["text"], tok=self._tok), 
+            build_boundary_encoder_input(inst["text"], tok=self._tok, ssi_prompt=self._ssi_prompt), 
             build_sel(blocks, "boundary", self._tok, random_sel=self._random_sel)
         )
 
@@ -82,7 +83,7 @@ class S2GCollator:
             inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
         )
         enc = build_ner_encoder_input(
-            pos_ent + neg_ent, inst["tokens"], [], random_order=self._random_prompt, tok=self._tok
+            pos_ent + neg_ent, inst["tokens"], [], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
         )
         allowed_ents = set(pos_ent)
         filtered_blocks = [b for b in blocks if b.get("type") in allowed_ents]
@@ -95,7 +96,7 @@ class S2GCollator:
         )
         data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in inst["entities"]]
         enc = build_re_encoder_input(
-            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok
+            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
@@ -107,7 +108,7 @@ class S2GCollator:
         )
         data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
         enc = build_re_encoder_input(
-            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok
+            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
@@ -118,7 +119,7 @@ class S2GCollator:
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
         enc = build_boundary_joint_encoder_input(
-            pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok
+            pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
@@ -132,7 +133,7 @@ class S2GCollator:
             inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
         )
         enc = build_joint_encoder_input(
-            pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok
+            pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
         )
         allowed_ents = set(pos_ent)
         filtered_blocks = filter_entity_blocks(

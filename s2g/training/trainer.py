@@ -80,6 +80,7 @@ class S2GTrainer(Seq2SeqTrainer):
         self._max_tgt = self._eval_cfg["max_target_length"]
         self._eval_bs = self._eval_cfg["eval_batch_size"]
         self._eval_beams = self._eval_cfg["eval_beams"]
+        self._ssi_prompt = self._eval_cfg.get("ssi_prompt", "ssi")
         
         self._specials_to_remove = [
             tok for tok in (self.processing_class.pad_token, self.processing_class.eos_token, self.processing_class.bos_token) if tok
@@ -332,7 +333,7 @@ class S2GTrainer(Seq2SeqTrainer):
 
         b_per_inst = []
         if use_boundary:
-            b_inputs = [build_boundary_encoder_input(inst["text"], tok=self._tokens) for inst in instances]
+            b_inputs = [build_boundary_encoder_input(inst["text"], tok=self._tokens, ssi_prompt=self._ssi_prompt) for inst in instances]
             b_per_inst = self._run_generation(b_inputs, desc=f"({prefix}) Boundary")
         else:
             b_per_inst = [[] for _ in instances]
@@ -341,12 +342,12 @@ class S2GTrainer(Seq2SeqTrainer):
         if use_ner:
             if use_boundary:
                 n_inputs = [
-                    build_ner_encoder_input(self._entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, self._tokens) 
+                    build_ner_encoder_input(self._entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, self._tokens, ssi_prompt=self._ssi_prompt) 
                     for inst, b in zip(instances, b_per_inst)
                 ]
             else:
                 n_inputs = [
-                    build_ner_encoder_input(self._entity_schema, inst["tokens"], [], False, self._tokens) 
+                    build_ner_encoder_input(self._entity_schema, inst["tokens"], [], False, self._tokens, ssi_prompt=self._ssi_prompt) 
                     for inst in instances
                 ]
             n_per_inst = self._run_generation(n_inputs, desc=f"({prefix}) NER")
@@ -365,14 +366,14 @@ class S2GTrainer(Seq2SeqTrainer):
                     else:
                         entity_data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
                         ner_maps.append({e["text"]: "" for e in inst["entities"]})
-                    r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], entity_data, False, self._tokens))
+                    r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], entity_data, False, self._tokens, ssi_prompt=self._ssi_prompt))
             else:
                 for inst, b, n in zip(instances, b_per_inst, n_per_inst):
                     if use_ner:
-                        r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, self._tokens))
+                        r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, self._tokens, ssi_prompt=self._ssi_prompt))
                         ner_maps.append({e["text"]: e.get("type", "") for e in n})
                     else:
-                        r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, self._tokens))
+                        r_inputs.append(build_re_encoder_input(self._rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, self._tokens, ssi_prompt=self._ssi_prompt))
                         ner_maps.append({e["text"]: "" for e in b})
             r_per_inst = self._run_generation(r_inputs, desc=f"({prefix}) RE")
         else:
@@ -396,14 +397,14 @@ class S2GTrainer(Seq2SeqTrainer):
 
         j_per_inst = []
         if use_boundary_joint:
-            j_inputs = [build_boundary_joint_encoder_input(self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
+            j_inputs = [build_boundary_joint_encoder_input(self._rel_schema, inst["text"], False, self._tokens, ssi_prompt=self._ssi_prompt) for inst in instances]
             j_per_inst = self._run_generation(j_inputs, desc=f"({prefix}) BoundaryJoint")
         else:
             j_per_inst = [[] for _ in instances]
 
         jp_per_inst = []
         if use_joint:
-            jp_inputs = [build_joint_encoder_input(self._entity_schema, self._rel_schema, inst["text"], False, self._tokens) for inst in instances]
+            jp_inputs = [build_joint_encoder_input(self._entity_schema, self._rel_schema, inst["text"], False, self._tokens, ssi_prompt=self._ssi_prompt) for inst in instances]
             jp_per_inst = self._run_generation(jp_inputs, desc=f"({prefix}) BoundaryJoint+")
         else:
             jp_per_inst = [[] for _ in instances]

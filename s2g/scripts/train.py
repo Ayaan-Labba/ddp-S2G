@@ -69,6 +69,7 @@ def main() -> None:
         "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
         "tasks": tasks, "mode": cfg.ssi.mode, "max_steps": cfg.train.max_steps,
         "use_rejection": cfg.ssi.use_rejection,
+        "ssi_prompt": cfg.ssi.ssi_prompt,
     })
 
     variant_to_callback_task = {
@@ -103,7 +104,7 @@ def main() -> None:
 
     trainer = S2GTrainer(
         scheduler_type=cfg.scheduler.type, model_variant=cfg.model.model_variant, tokens=tokens, entity_schema=entity_schema, rel_schema=rel_schema, train_eval_dataset=train_eval_dataset,
-        eval_cfg={"max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length, "eval_batch_size": cfg.validation.batch_size, "eval_beams": cfg.generation.num_beams},
+        eval_cfg={"max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length, "eval_batch_size": cfg.validation.batch_size, "eval_beams": cfg.generation.num_beams, "ssi_prompt": cfg.ssi.ssi_prompt},
         model=model, train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=collator, processing_class=tokenizer, callbacks=callbacks,
         args=Seq2SeqTrainingArguments(
             output_dir=cfg.data.output_dir, 

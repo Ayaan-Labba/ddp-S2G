@@ -82,6 +82,7 @@ def _extract_ssi_labels(
         elif curr_kind:
             curr.append(int(token_id))
 
+    task = None
     if seen_bound:
         task = "boundary"
     elif seen_ner and seen_re:
@@ -90,6 +91,27 @@ def _extract_ssi_labels(
         task = "ner"
     elif seen_re:
         task = "re" if tokens.variant in {"re", "pipeline"} else "boundary_joint"
+    else:
+        # Fallback task determination when no SSI is present (natural or false)
+        variant = tokens.variant
+        if variant in {"joint", "boundary_joint", "ner", "re", "boundary", "boundary_re"}:
+            task = variant
+        elif variant == "pipeline":
+            # If <ent> is in source_row, it's RE task
+            ent_start_id = tid.get("ent_start")
+            if ent_start_id is not None and ent_start_id in source_row:
+                task = "re"
+            else:
+                task = "ner"
+        elif variant == "boundary_pipeline":
+            # If <ent> is in source_row, it's boundary_re task
+            ent_start_id = tid.get("ent_start")
+            if ent_start_id is not None and ent_start_id in source_row:
+                task = "boundary_joint"
+            else:
+                task = "boundary"
+        else:
+            task = "pipeline"
 
     return task, ent_seqs, rel_seqs
 
@@ -120,7 +142,8 @@ class _HypState:
 class ConstraintDecodingProcessor(LogitsProcessor):
     def __init__(
             self, tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-            tokens: AnyTokens, num_beams: int = 1
+            tokens: AnyTokens, num_beams: int = 1,
+            entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
         ) -> None:
         self.num_beams, self._batch_size = num_beams, source_ids.shape[0]
         
@@ -151,6 +174,59 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 eos_id=self.eos_id, 
                 pad_id=self.pad_id
             )
+
+            # Load schemas from file if not provided as arguments and they are needed
+            if (entity_schema is None or rel_schema is None) and (not e_seqs or not r_seqs):
+                import sys
+                schema_file = None
+                entity_schema_file = None
+                for idx, arg in enumerate(sys.argv):
+                    if arg == "--schema_file" and idx + 1 < len(sys.argv):
+                        schema_file = sys.argv[idx + 1]
+                    elif arg.startswith("--schema_file="):
+                        schema_file = arg.split("=", 1)[1]
+                    elif arg == "--entity_schema_file" and idx + 1 < len(sys.argv):
+                        entity_schema_file = sys.argv[idx + 1]
+                    elif arg.startswith("--entity_schema_file="):
+                        entity_schema_file = arg.split("=", 1)[1]
+                
+                config_path = None
+                for idx, arg in enumerate(sys.argv):
+                    if arg == "--config" and idx + 1 < len(sys.argv):
+                        config_path = sys.argv[idx + 1]
+                    elif arg.startswith("--config="):
+                        config_path = arg.split("=", 1)[1]
+                if config_path and (not schema_file or not entity_schema_file):
+                    try:
+                        from omegaconf import OmegaConf
+                        cfg = OmegaConf.load(config_path)
+                        if not schema_file and hasattr(cfg, "data") and cfg.data.get("schema_file"):
+                            schema_file = cfg.data.schema_file
+                        if not entity_schema_file and hasattr(cfg, "data") and cfg.data.get("entity_schema_file"):
+                            entity_schema_file = cfg.data.entity_schema_file
+                    except Exception:
+                        pass
+                
+                from s2g.scripts.config_utils import load_schema, load_entity_schema
+                if rel_schema is None and schema_file:
+                    try:
+                        rel_schema = load_schema(schema_file)
+                    except Exception as e:
+                        logger.warning("FSM: Failed to load rel_schema from %s: %s", schema_file, e)
+                if entity_schema is None and entity_schema_file:
+                    try:
+                        entity_schema = load_entity_schema(entity_schema_file)
+                    except Exception as e:
+                        logger.warning("FSM: Failed to load entity_schema from %s: %s", entity_schema_file, e)
+
+            # If e_seqs is empty and entity_schema is available, tokenize the schema
+            if not e_seqs and entity_schema and task in {"ner", "joint"}:
+                e_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in entity_schema]
+                
+            # If r_seqs is empty and rel_schema is available, tokenize the schema
+            if not r_seqs and rel_schema and task in {"re", "boundary_re", "boundary_joint", "joint"}:
+                r_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in rel_schema]
+
             self._tasks.append(task)
             
             self._ent_type_tries.append(
@@ -166,6 +242,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             null_map = {
                 "ner": (e_seqs, {self.null_id, self.eos_id}), 
                 "re": (r_seqs, {self.null_id, self.eos_id}), 
+                "boundary_re": (r_seqs, {self.null_id, self.eos_id}),
                 "boundary_joint": (r_seqs, {self.null_id, self.eos_id}), 
                 "joint": (e_seqs + r_seqs, {self.null_id, self.eos_id})
             }
@@ -312,6 +389,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
 def build_constraint_processor(
         tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-        tokens: AnyTokens = S2GTokens("pipeline"), num_beams: int = 1
+        tokens: AnyTokens = S2GTokens("pipeline"), num_beams: int = 1,
+        entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
     ) -> ConstraintDecodingProcessor:
-    return ConstraintDecodingProcessor(tokenizer=tokenizer, source_ids=source_ids, tokens=tokens, num_beams=num_beams)
+    return ConstraintDecodingProcessor(tokenizer=tokenizer, source_ids=source_ids, tokens=tokens, num_beams=num_beams, entity_schema=entity_schema, rel_schema=rel_schema)

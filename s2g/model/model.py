@@ -44,6 +44,8 @@ class S2GModel:
             attention_mask: torch.Tensor, 
             constraint_decoding: bool = False, 
             source_ids: Optional[torch.Tensor] = None, 
+            entity_schema: Optional[List[str]] = None,
+            rel_schema: Optional[List[str]] = None,
             **kwargs: Any
         ) -> torch.Tensor:
         
@@ -55,7 +57,9 @@ class S2GModel:
                 self.tokenizer, 
                 source_ids, 
                 self._tokens, 
-                kwargs.get("num_beams", 1)
+                kwargs.get("num_beams", 1),
+                entity_schema=entity_schema,
+                rel_schema=rel_schema
             )
             if "logits_processor" not in kwargs:
                 kwargs["logits_processor"] = LogitsProcessorList()

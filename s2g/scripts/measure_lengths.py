@@ -30,7 +30,7 @@ def _pct_dict(values: List[int]) -> Dict[int, int]:
     return {p: int(np.percentile(np.array(values, dtype=np.int32), p, method="lower")) for p in _PCTS}
 
 
-def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str], tokens: S2GTokens) -> Dict[str, Dict[int, int]]:
+def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str], tokens: S2GTokens, ssi_prompt: str = "ssi") -> Dict[str, Dict[int, int]]:
     use_boundary = "boundary" in tasks
     use_ner = "ner" in tasks
     use_re = "re" in tasks
@@ -51,22 +51,22 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
         blocks = organize_by_entity(ents, inst["relations"])
 
         if use_boundary:
-            src_lengths["boundary"].append(len(tokenizer.encode(build_boundary_encoder_input(inst["text"], tok=tokens), add_special_tokens=True)))
+            src_lengths["boundary"].append(len(tokenizer.encode(build_boundary_encoder_input(inst["text"], tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["boundary"].append(len(tokenizer.encode(build_sel(blocks, "boundary", tokens), add_special_tokens=True)))
 
         if use_ner:
             spans = [(int(e["offset"][0]), int(e["offset"][1])) for e in ents]
-            src_lengths["ner"].append(len(tokenizer.encode(build_ner_encoder_input(entity_schema, toks, spans, tok=tokens), add_special_tokens=True)))
+            src_lengths["ner"].append(len(tokenizer.encode(build_ner_encoder_input(entity_schema, toks, spans, tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["ner"].append(len(tokenizer.encode(build_sel(blocks, "ner", tokens, rejected_ent_types=neg_e), add_special_tokens=True)))
 
         if use_re:
             data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in ents]
-            src_lengths["re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens), add_special_tokens=True)))
+            src_lengths["re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["re"].append(len(tokenizer.encode(build_sel(blocks, "re", tokens, rejected_rel_types=neg_r), add_special_tokens=True)))
 
         if use_boundary_re:
             data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in ents]
-            src_lengths["boundary_re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens), add_special_tokens=True)))
+            src_lengths["boundary_re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["boundary_re"].append(len(tokenizer.encode(build_sel(blocks, "boundary_re", tokens, rejected_rel_types=neg_r), add_special_tokens=True)))
 
     res = {}
@@ -76,7 +76,7 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
     return res
 
 
-def _scan_boundary_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str], tokens: S2GTokens) -> Dict[str, Dict[int, int]]:
+def _scan_boundary_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel_schema: List[str], tasks: List[str], tokens: S2GTokens, ssi_prompt: str = "ssi") -> Dict[str, Dict[int, int]]:
     use_boundary_joint = "boundary_joint" in tasks
     use_joint = "joint" in tasks
 
@@ -94,11 +94,11 @@ def _scan_boundary_joint(dataset: S2GDataset, tokenizer, entity_schema: List[str
         blocks = organize_by_entity(inst["entities"], inst["relations"])
 
         if use_boundary_joint:
-            src_lengths["boundary_joint"].append(len(tokenizer.encode(build_boundary_joint_encoder_input(rel_schema, inst["text"], tok=tokens), add_special_tokens=True)))
+            src_lengths["boundary_joint"].append(len(tokenizer.encode(build_boundary_joint_encoder_input(rel_schema, inst["text"], tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["boundary_joint"].append(len(tokenizer.encode(build_sel(blocks, "boundary_joint", tokens, rejected_rel_types=neg_r), add_special_tokens=True)))
 
         if use_joint:
-            src_lengths["joint"].append(len(tokenizer.encode(build_joint_encoder_input(entity_schema, rel_schema, inst["text"], tok=tokens), add_special_tokens=True)))
+            src_lengths["joint"].append(len(tokenizer.encode(build_joint_encoder_input(entity_schema, rel_schema, inst["text"], tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["joint"].append(len(tokenizer.encode(build_sel(blocks, "joint", tokens, rejected_ent_types=neg_e, rejected_rel_types=neg_r), add_special_tokens=True)))
 
     res = {}
@@ -139,7 +139,7 @@ def main() -> None:
     }
 
     scan_fn = lambda d, tok, es, rs: (
-        _scan_pipeline(d, tok, es, rs, tasks, tokens) if is_pipeline_style else _scan_boundary_joint(d, tok, es, rs, tasks, tokens)
+        _scan_pipeline(d, tok, es, rs, tasks, tokens, ssi_prompt=cfg.ssi.ssi_prompt) if is_pipeline_style else _scan_boundary_joint(d, tok, es, rs, tasks, tokens, ssi_prompt=cfg.ssi.ssi_prompt)
     )
     per_split = {n: scan_fn(S2GDataset(Path(cfg.data.data_dir) / f"{n}.jsonl", seed=cfg.train.seed), tokenizer, entity_schema, rel_schema) 
                  for n in ("train", "val", "test") if (Path(cfg.data.data_dir) / f"{n}.jsonl").exists()}

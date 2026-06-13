@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 def _generate_batch(
     model: Any, tokenizer: Any, encoder_inputs: List[str], tokens: AnyTokens,
-    max_source_length: int, max_target_length: int, eval_beams: int, device: torch.device, constraint_decoding: bool = False
+    max_source_length: int, max_target_length: int, eval_beams: int, device: torch.device,
+    constraint_decoding: bool = False, entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
 ) -> List[List[EntityBlock]]:
     tok_out = tokenizer(
         encoder_inputs, max_length=max_source_length, truncation=True, padding="longest", return_tensors="pt"
@@ -40,7 +41,7 @@ def _generate_batch(
     gen_kwargs = {**tok_out, "num_beams": eval_beams, "max_length": max_target_length, "length_penalty": 0.0, "no_repeat_ngram_size": 0, "early_stopping": False}
 
     if constraint_decoding:
-        gen_kwargs["logits_processor"] = [build_constraint_processor(tokenizer, tok_out["input_ids"], tokens, eval_beams)]
+        gen_kwargs["logits_processor"] = [build_constraint_processor(tokenizer, tok_out["input_ids"], tokens, eval_beams, entity_schema=entity_schema, rel_schema=rel_schema)]
 
     dtype = next(model.parameters()).dtype
     ctx = torch.autocast(device.type, dtype) if dtype in {torch.bfloat16, torch.float16} and device.type == "cuda" else contextlib.nullcontext()
@@ -71,7 +72,7 @@ def _to_entity_data(source_tokens: List[str], entities: List[EntityBlock], use_t
     ))
 
 
-def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None) -> Tuple[Dict[str, Any], Dict[str, float]]:
+def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None, ssi_prompt="ssi") -> Tuple[Dict[str, Any], Dict[str, float]]:
     if tasks is None:
         tasks = ["ner", "re"]
     use_boundary = "boundary" in tasks
@@ -81,11 +82,11 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
 
     def _run(inputs):
         return [ent for i in tqdm(range(0, len(inputs), batch_size), leave=False) 
-                for ent in _generate_batch(model, tokenizer, inputs[i:i+batch_size], tokens, max_source_length, max_target_length, eval_beams, device, constraint_decoding)]
+                for ent in _generate_batch(model, tokenizer, inputs[i:i+batch_size], tokens, max_source_length, max_target_length, eval_beams, device, constraint_decoding, entity_schema, rel_schema)]
 
     b_per_inst = []
     if use_boundary:
-        b_per_inst = _run([build_boundary_encoder_input(inst["text"], tok=tokens) for inst in instances])
+        b_per_inst = _run([build_boundary_encoder_input(inst["text"], tok=tokens, ssi_prompt=ssi_prompt) for inst in instances])
     else:
         b_per_inst = [[] for _ in instances]
 
@@ -93,12 +94,12 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
     if use_ner:
         if use_boundary:
             n_inputs = [
-                build_ner_encoder_input(entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, tokens) 
+                build_ner_encoder_input(entity_schema, inst["tokens"], _to_spans(inst["tokens"], b), False, tokens, ssi_prompt=ssi_prompt) 
                 for inst, b in zip(instances, b_per_inst)
             ]
         else:
             n_inputs = [
-                build_ner_encoder_input(entity_schema, inst["tokens"], [], False, tokens) 
+                build_ner_encoder_input(entity_schema, inst["tokens"], [], False, tokens, ssi_prompt=ssi_prompt) 
                 for inst in instances
             ]
         n_per_inst = _run(n_inputs)
@@ -117,14 +118,14 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
                 else:
                     entity_data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
                     ner_maps.append({e["text"]: "" for e in inst["entities"]})
-                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], entity_data, False, tokens))
+                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], entity_data, False, tokens, ssi_prompt=ssi_prompt))
         else:
             for inst, b, n in zip(instances, b_per_inst, n_per_inst):
                 if use_ner:
-                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens))
+                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens, ssi_prompt=ssi_prompt))
                     ner_maps.append({e["text"]: e.get("type", "") for e in n})
                 else:
-                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens))
+                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens, ssi_prompt=ssi_prompt))
                     ner_maps.append({e["text"]: "" for e in b})
         r_per_inst = _run(r_inputs)
     else:
@@ -163,7 +164,7 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
     return per_inst, m
 
 
-def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None) -> Tuple[Dict[str, Any], Dict[str, float]]:
+def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_schema, tokens, max_source_length, max_target_length, batch_size, eval_beams, device, constraint_decoding, tasks=None, ssi_prompt="ssi") -> Tuple[Dict[str, Any], Dict[str, float]]:
     if tasks is None:
         tasks = ["boundary_joint", "joint"]
     use_boundary_joint = "boundary_joint" in tasks
@@ -171,17 +172,17 @@ def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_sch
 
     def _run(inputs):
         return [ent for i in tqdm(range(0, len(inputs), batch_size), leave=False) 
-                for ent in _generate_batch(model, tokenizer, inputs[i:i+batch_size], tokens, max_source_length, max_target_length, eval_beams, device, constraint_decoding)]
+                for ent in _generate_batch(model, tokenizer, inputs[i:i+batch_size], tokens, max_source_length, max_target_length, eval_beams, device, constraint_decoding, entity_schema, rel_schema)]
 
     j_per_inst = []
     if use_boundary_joint:
-        j_per_inst  = _run([build_boundary_joint_encoder_input(rel_schema, inst["text"], False, tokens) for inst in instances])
+        j_per_inst  = _run([build_boundary_joint_encoder_input(rel_schema, inst["text"], False, tokens, ssi_prompt=ssi_prompt) for inst in instances])
     else:
         j_per_inst = [[] for _ in instances]
 
     jp_per_inst = []
     if use_joint:
-        jp_per_inst = _run([build_joint_encoder_input(entity_schema, rel_schema, inst["text"], False, tokens) for inst in instances])
+        jp_per_inst = _run([build_joint_encoder_input(entity_schema, rel_schema, inst["text"], False, tokens, ssi_prompt=ssi_prompt) for inst in instances])
     else:
         jp_per_inst = [[] for _ in instances]
 
@@ -257,7 +258,7 @@ def main() -> None:
         model, tokenizer, instances, entity_schema, rel_schema, tokens,
         cfg.tokenization.max_source_length, cfg.tokenization.max_target_length,
         cfg.validation.batch_size, cfg.generation.num_beams, device, cfg.generation.constraint_decoding,
-        tasks
+        tasks, ssi_prompt=cfg.ssi.ssi_prompt
     )
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
