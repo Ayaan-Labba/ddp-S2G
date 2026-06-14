@@ -81,6 +81,7 @@ class SSIConfig:
     random_prompt: bool = False
     random_sel: bool = False
     use_rejection: bool = False
+    use_nesting: bool = True
     ssi_prompt: str = "ssi"
 
 @dataclass
