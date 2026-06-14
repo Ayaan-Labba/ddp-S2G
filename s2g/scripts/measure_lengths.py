@@ -15,7 +15,7 @@ from s2g.data import S2GDataset
 from s2g.linearisation import (
     S2GTokens, add_special_tokens_to_tokenizer,
     build_boundary_encoder_input, build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_ner_encoder_input, build_re_encoder_input, build_sel, organize_by_entity,
+    build_ner_encoder_input, build_re_encoder_input, build_boundary_re_encoder_input, build_sel, organize_by_entity,
     VARIANT_TO_TASKS,
 )
 from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
@@ -61,12 +61,12 @@ def _scan_pipeline(dataset: S2GDataset, tokenizer, entity_schema: List[str], rel
 
         if use_re:
             data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in ents]
-            src_lengths["re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
+            src_lengths["re"].append(len(tokenizer.encode(build_re_encoder_input(entity_schema, rel_schema, inst["text"], tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["re"].append(len(tokenizer.encode(build_sel(blocks, "re", tokens, rejected_rel_types=neg_r), add_special_tokens=True)))
 
         if use_boundary_re:
             data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in ents]
-            src_lengths["boundary_re"].append(len(tokenizer.encode(build_re_encoder_input(rel_schema, toks, data, tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
+            src_lengths["boundary_re"].append(len(tokenizer.encode(build_boundary_re_encoder_input(rel_schema, inst["text"], tok=tokens, ssi_prompt=ssi_prompt), add_special_tokens=True)))
             tgt_lengths["boundary_re"].append(len(tokenizer.encode(build_sel(blocks, "boundary_re", tokens, rejected_rel_types=neg_r), add_special_tokens=True)))
 
     res = {}
