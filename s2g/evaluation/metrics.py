@@ -2,11 +2,47 @@
 Evaluation metrics for the S2G model.
 """
 from __future__ import annotations
+import re
+import string
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 Triplet = Tuple[str, str, str]
 Quintuple = Tuple[str, str, str, str, str]
 EntityMention = Tuple[str, str]
+
+
+_PUNCT = string.punctuation + "‘’“”—–…"
+_WS = re.compile(r"\s+")
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([^\w\s])")
+
+
+def _norm_span(s: str) -> str:
+    """Canonicalise a surface span so detokenisation conventions don't cause
+    spurious mismatches. Symmetric on gold and predictions. Neutralises:
+    case, internal whitespace, spaces before punctuation (NLTK detok), and
+    surrounding punctuation tokens (e.g. gold 'Calif .' vs pred 'Calif').
+    Genuine boundary differences (e.g. 'President Kennedy' vs 'Kennedy') are
+    preserved as real errors.
+    """
+    s = _WS.sub(" ", s.strip().casefold())
+    s = _SPACE_BEFORE_PUNCT.sub(r"\1", s)
+    return s.strip(_PUNCT + " ")
+
+
+def _n_entities(rows: List[List[str]]) -> List[List[str]]:
+    return [[_norm_span(x) for x in r] for r in rows]
+
+
+def _n_mentions(rows: List[List[EntityMention]]) -> List[List[EntityMention]]:
+    return [[(_norm_span(t), ty) for t, ty in r] for r in rows]
+
+
+def _n_triplets(rows: List[List[Triplet]]) -> List[List[Triplet]]:
+    return [[(_norm_span(h), rt, _norm_span(t)) for h, rt, t in r] for r in rows]
+
+
+def _n_quints(rows: List[List[Quintuple]]) -> List[List[Quintuple]]:
+    return [[(_norm_span(h), ht, rt, _norm_span(t), tt) for h, ht, rt, t, tt in r] for r in rows]
 
 
 def _prf(predicted: Set, gold: Set) -> Dict[str, float]:
@@ -51,35 +87,35 @@ def _corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefi
 
 
 def corpus_rel_boundary_f1(all_predicted: List[List[Triplet]], all_gold: List[List[Triplet]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "boundary")
+    return _corpus_prf(_n_triplets(all_predicted), _n_triplets(all_gold), "boundary")
 
 
 def corpus_rel_strict_f1(all_predicted: List[List[Quintuple]], all_gold: List[List[Quintuple]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "strict")
+    return _corpus_prf(_n_quints(all_predicted), _n_quints(all_gold), "strict")
 
 
 def corpus_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[str]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "ner_boundary")
+    return _corpus_prf(_n_entities(all_predicted), _n_entities(all_gold), "ner_boundary")
 
 
 def corpus_ner_strict_f1(all_predicted: List[List[EntityMention]], all_gold: List[List[EntityMention]]) -> Dict[str, float]:
-    return _corpus_prf(all_predicted, all_gold, "ner")
+    return _corpus_prf(_n_mentions(all_predicted), _n_mentions(all_gold), "ner")
 
 
 def macro_rel_boundary_f1(all_predicted: List[List[Triplet]], all_gold: List[List[Triplet]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "boundary") for p, g in zip(all_predicted, all_gold)], "boundary")
+    return _macro_average([_instance_prf(p, g, "boundary") for p, g in zip(_n_triplets(all_predicted), _n_triplets(all_gold))], "boundary")
 
 
 def macro_rel_strict_f1(all_predicted: List[List[Quintuple]], all_gold: List[List[Quintuple]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "strict") for p, g in zip(all_predicted, all_gold)], "strict")
+    return _macro_average([_instance_prf(p, g, "strict") for p, g in zip(_n_quints(all_predicted), _n_quints(all_gold))], "strict")
 
 
 def macro_ner_boundary_f1(all_predicted: List[List[str]], all_gold: List[List[str]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "ner_boundary") for p, g in zip(all_predicted, all_gold)], "ner_boundary")
+    return _macro_average([_instance_prf(p, g, "ner_boundary") for p, g in zip(_n_entities(all_predicted), _n_entities(all_gold))], "ner_boundary")
 
 
 def macro_ner_strict_f1(all_predicted: List[List[EntityMention]], all_gold: List[List[EntityMention]]) -> Dict[str, float]:
-    return _macro_average([_instance_prf(p, g, "ner") for p, g in zip(all_predicted, all_gold)], "ner")
+    return _macro_average([_instance_prf(p, g, "ner") for p, g in zip(_n_mentions(all_predicted), _n_mentions(all_gold))], "ner")
 
 
 def compute_metrics_for_task(
