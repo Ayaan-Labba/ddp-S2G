@@ -90,19 +90,19 @@ def add_special_tokens_to_tokenizer(
         # Warm start special tokens with embeddings of related natural text
         token_map = {
             tokens.trip: ".",
-            tokens.sep: ",",
-            tokens.head: "head",
-            tokens.tail: "tail",
-            tokens.rel: "relation",
-            tokens.type_: "type",
+            tokens.sep: ":",
+            tokens.head: "the subject",
+            tokens.tail: "to the object",
+            tokens.rel: "has relation",
+            tokens.type_: "of type",
             tokens.ner: "entity",
             tokens.re: "relation",
             tokens.bound: "boundary",
             tokens.text: "text",
-            tokens.nest: "and",
-            tokens.ent_start: "entity",
-            tokens.ent_end: "entity",
-            tokens.null: "none"
+            tokens.nest: "the same subject",
+            tokens.ent_start: "entity span start",
+            tokens.ent_end: "entity span end",
+            tokens.null: "did not find"
         }
         
         with torch.no_grad():
