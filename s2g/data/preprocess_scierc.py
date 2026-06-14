@@ -2,13 +2,17 @@
 Pre-processing script for the SciERC dataset.
 Supports standard sentence-level and broader document-level parsing.
 Strictly maps document-absolute indexing formats to target requirements.
+
+REBEL behaviour: every instance is kept regardless of whether it has entities
+or relations.  We mirror that here: _build_instance no longer filters on
+empty entities, and the callers in convert_document / convert_document_level
+are updated accordingly.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import logging
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 
@@ -24,27 +28,28 @@ def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dic
     if not path.exists():
         logger.warning(f"Config map file {config_map_path} not found. Using raw labels.")
         return {}, {}
-    
+
     with open(path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    
+
     if not config:
         return {}, {}
-        
+
     entities = config.get("entities", {}) or {}
     relations = config.get("relations", {}) or {}
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 
 def _build_instance(tokens: List[str], entities: List[Dict], relations: List[Dict]) -> Optional[Dict]:
-    if not entities: 
+    # Skip only if there are no tokens — REBEL keeps entity-less / relation-less instances.
+    if not tokens:
         return None
     return {
-        "text": " ".join(tokens), 
-        "tokens": tokens, 
-        "entities": entities, 
+        "text": " ".join(tokens),
+        "tokens": tokens,
+        "entities": entities,
         "relations": relations,
-        "entity_types": sorted({e["type"] for e in entities}), 
+        "entity_types": sorted({e["type"] for e in entities}),
         "rel_types": sorted({r["type"] for r in relations}),
     }
 
@@ -53,7 +58,6 @@ def convert_document(doc: Dict, entity_map: Dict[str, str], relation_map: Dict[s
     sentences, ner_per_sent, rel_per_sent = doc["sentences"], doc.get("ner", []), doc.get("relations", [])
     instances = []
 
-    # Map sequential offsets (SciERC from PURE indexes across the entire doc)
     sent_offsets = [0]
     for s in sentences[:-1]:
         sent_offsets.append(sent_offsets[-1] + len(s))
@@ -63,40 +67,35 @@ def convert_document(doc: Dict, entity_map: Dict[str, str], relation_map: Dict[s
         rel = rel_per_sent[i] if i < len(rel_per_sent) else []
         n_tok = len(tokens)
         off = sent_offsets[i]
-        
+
         entities, span_idx = [], {}
         for s, e, t in ner:
             s_int, e_int = int(s), int(e)
-            
-            # Deterministic absolute to relative transformation
             s_rel, e_rel = s_int - off, e_int - off
-
             if 0 <= s_rel <= e_rel < n_tok and (s_rel, e_rel + 1) not in span_idx:
                 span_idx[(s_rel, e_rel + 1)] = len(entities)
                 mapped_type = entity_map.get(t, t)
                 entities.append({
-                    "text": " ".join(tokens[s_rel:e_rel+1]), 
-                    "offset": [s_rel, e_rel+1], 
+                    "text": " ".join(tokens[s_rel:e_rel + 1]),
+                    "offset": [s_rel, e_rel + 1],
                     "type": mapped_type
                 })
 
         relations = []
         for r in rel:
             h_s, h_e, t_s, t_e = int(r[0]), int(r[1]), int(r[2]), int(r[3])
-            
-            # Deterministic absolute to relative transformation
             h_s, h_e, t_s, t_e = h_s - off, h_e - off, t_s - off, t_e - off
-            
             h_key, t_key = (h_s, h_e + 1), (t_s, t_e + 1)
             if h_key in span_idx and t_key in span_idx:
                 mapped_rel_type = relation_map.get(r[4], r[4])
                 relations.append({
-                    "head": entities[span_idx[h_key]], 
-                    "tail": entities[span_idx[t_key]], 
+                    "head": entities[span_idx[h_key]],
+                    "tail": entities[span_idx[t_key]],
                     "type": mapped_rel_type
                 })
 
-        if inst := _build_instance(tokens, entities, relations): 
+        # _build_instance now returns an instance even for empty-entity sentences
+        if inst := _build_instance(tokens, entities, relations):
             instances.append(inst)
 
     return instances
@@ -112,7 +111,6 @@ def convert_document_level(doc: Dict, entity_map: Dict[str, str], relation_map: 
     for i, ner in enumerate(doc.get("ner", [])):
         for s, e, t in ner:
             s_abs, e_abs = int(s), int(e)
-
             key = (s_abs, e_abs + 1)
             if key not in span_to_ent and 0 <= s_abs <= e_abs < len(doc_tokens):
                 mapped_type = entity_map.get(t, t)
@@ -124,13 +122,12 @@ def convert_document_level(doc: Dict, entity_map: Dict[str, str], relation_map: 
     for i, rel in enumerate(doc.get("relations", [])):
         for r in rel:
             h_s_abs, h_e_abs, t_s_abs, t_e_abs = int(r[0]), int(r[1]), int(r[2]), int(r[3])
-
             h_key, t_key = (h_s_abs, h_e_abs + 1), (t_s_abs, t_e_abs + 1)
             if h_key in span_to_ent and t_key in span_to_ent:
                 mapped_rel_type = relation_map.get(r[4], r[4])
                 relations.append({
-                    "head": span_to_ent[h_key], 
-                    "tail": span_to_ent[t_key], 
+                    "head": span_to_ent[h_key],
+                    "tail": span_to_ent[t_key],
                     "type": mapped_rel_type
                 })
 
@@ -144,33 +141,31 @@ def process_split(
     seen_ent: Set[str] = set()
     seen_rel: Set[str] = set()
     written = 0
-    
+
     with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
         for line in filter(None, (ln.strip() for ln in fin)):
             doc = json.loads(line)
-            
+
             if document_level:
-                # Document-level processing
                 if d_inst := convert_document_level(doc, entity_map, relation_map):
                     fout.write(json.dumps(d_inst, ensure_ascii=False) + "\n")
                     seen_ent.update(d_inst["entity_types"])
                     seen_rel.update(d_inst["rel_types"])
                     written += 1
             else:
-                # Sentence-level processing
                 for inst in convert_document(doc, entity_map, relation_map):
                     fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
                     seen_ent.update(inst["entity_types"])
                     seen_rel.update(inst["rel_types"])
                     written += 1
-        
+
     logger.info("%s → %s (%d instances written)", input_path.name, output_path.name, written)
     return list(seen_ent), list(seen_rel)
 
 
 def _write_schema(path: Path, types: List[str]) -> None:
     unique = sorted(set(types))
-    with open(path, "w", encoding="utf-8") as f: 
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(unique) + "\n")
 
 
@@ -192,13 +187,13 @@ def main() -> None:
     for in_name, out_name in {"train.json": "train.jsonl", "dev.json": "val.jsonl", "test.json": "test.jsonl"}.items():
         if (in_path := input_dir / in_name).exists():
             e, r = process_split(
-                in_path, 
-                output_dir / out_name, 
+                in_path,
+                output_dir / out_name,
                 args.document_level,
                 entity_map,
                 relation_map
             )
-            if in_name == "train.json": 
+            if in_name == "train.json":
                 all_ent, all_rel = e, r
 
     _write_schema(output_dir / "entity.schema", all_ent)

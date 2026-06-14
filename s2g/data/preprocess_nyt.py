@@ -1,5 +1,9 @@
 """
 Pre-processing script for the NYT-multi dataset (from the JointRE repo) into S2G fine-tuning format.
+
+REBEL behaviour (nyt_typed.py): every row is yielded regardless of whether
+it has relations — an empty spo_list produces an empty triplets string.
+We mirror that here: skip only if the record has no tokens at all.
 """
 from __future__ import annotations
 
@@ -23,36 +27,34 @@ def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dic
     if not path.exists():
         logger.warning(f"Config map file {config_map_path} not found. Using raw labels.")
         return {}, {}
-    
+
     with open(path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    
+
     if not config:
         return {}, {}
-        
+
     entities = config.get("entities", {}) or {}
     relations = config.get("relations", {}) or {}
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 
 def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Optional[Dict]:
+    # Skip only if there are no tokens — REBEL keeps relation-less instances.
     tokens = raw.get("tokens")
-    if not tokens or not raw.get("spo_details"):
+    if not tokens:
         return None
-    
+
     text = " ".join(tokens)
     entities_registry: Dict[Tuple[int, int], Dict] = {}
     relations = []
 
-    # Zipping spo_list and spo_details together to align data perfectly
-    list_relations = zip(raw['spo_list'], raw['spo_details'])
-    
-    for relation, details in list_relations:
+    # zip safely produces nothing when either list is absent or empty
+    for relation, details in zip(raw.get("spo_list", []), raw.get("spo_details", [])):
         # details layout: [head_start, head_end, head_type, rel_type, tail_start, tail_end, tail_type]
         h_start, h_end, h_type = int(details[0]), int(details[1]), details[2]
         t_start, t_end, t_type = int(details[4]), int(details[5]), details[6]
 
-        # Process and track unique head entities
         h_key = (h_start, h_end)
         if h_key not in entities_registry:
             entities_registry[h_key] = {
@@ -61,7 +63,6 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
                 "type": entity_map.get(h_type, h_type)
             }
 
-        # Process and track unique tail entities
         t_key = (t_start, t_end)
         if t_key not in entities_registry:
             entities_registry[t_key] = {
@@ -73,17 +74,12 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
         head_obj = entities_registry[h_key]
         tail_obj = entities_registry[t_key]
 
-        # Extract relation configurations
         raw_rel_type = relation[1].split("/")[-1]
         mapped_rel_type = relation_map.get(raw_rel_type, raw_rel_type)
-
-        # Do not include the flipping or REBEL mapping.
         relations.append({"head": head_obj, "tail": tail_obj, "type": mapped_rel_type})
 
-    # Transform our key registry back into an ordered entities list
+    # entities may be empty for relation-free rows — that is intentional (mirrors REBEL)
     entities = sorted(entities_registry.values(), key=lambda e: e["offset"])
-    if not entities:
-        return None
 
     types = sorted({r["type"] for r in relations})
     entity_blocks = organize_by_entity(entities, relations)
@@ -92,9 +88,9 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
     return {
         "text": text,
         "tokens": tokens,
-        "entities": entities, 
+        "entities": entities,
         "relations": relations,
-        "entity_types": sorted({e["type"] for e in entities}), 
+        "entity_types": sorted({e["type"] for e in entities}),
         "rel_types": types,
         "types": types,
         "sel": sel,
@@ -108,9 +104,8 @@ def process_split(
     seen_ent: Set[str] = set()
     seen_rel: Set[str] = set()
     skipped, written = 0, 0
-    
+
     with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
-        # NYT-multi datasets utilize entire top-level arrays
         data = json.load(fin)
         for raw in data:
             if inst := convert_instance(raw, entity_map, relation_map):
@@ -118,13 +113,13 @@ def process_split(
                 seen_ent.update(inst["entity_types"])
                 seen_rel.update(inst["rel_types"])
                 written += 1
-            else: 
+            else:
                 skipped += 1
-            
+
     logger.info(
-        "%s → %s (%d written, %d skipped)", 
-        input_path.name, 
-        output_path.name, 
+        "%s → %s (%d written, %d skipped)",
+        input_path.name,
+        output_path.name,
         written,
         skipped
     )
@@ -133,7 +128,7 @@ def process_split(
 
 def _write_schema(path: Path, types: List[str]) -> None:
     unique = sorted(set(types))
-    with open(path, "w", encoding="utf-8") as f: 
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(unique) + "\n")
     logger.info("Schema: %s (%d types)", path.name, len(unique))
 
@@ -152,18 +147,17 @@ def main() -> None:
     entity_map, relation_map = load_label_maps(args.config_map)
 
     all_ent, all_rel = [], []
-    
-    # Standard NYT-multi split naming convention
+
     file_map = {
-        "train.json": "train.jsonl", 
-        "dev.json": "val.jsonl", 
+        "train.json": "train.jsonl",
+        "dev.json": "val.jsonl",
         "test.json": "test.jsonl"
     }
-    
+
     for in_name, out_name in file_map.items():
         if (in_path := input_dir / in_name).exists():
             e, r = process_split(in_path, output_dir / out_name, entity_map, relation_map)
-            if in_name == "train.json": 
+            if in_name == "train.json":
                 all_ent, all_rel = e, r
 
     _write_schema(output_dir / "entity.schema", all_ent)
