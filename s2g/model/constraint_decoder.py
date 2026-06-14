@@ -127,6 +127,8 @@ class FSMState(Enum):
     INTER = auto()
     NULL_LABEL = auto()
     END = auto()
+    ENT_DECL_SPAN = auto()
+    TRIPLET_HEAD_SPAN = auto()
 
 @dataclass
 class _HypState:
@@ -282,7 +284,38 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             return frozenset({self.type_id})
         return frozenset()
 
-    def _transition(self, state: _HypState, token_id: int) -> None:
+    def _transition(self, state: _HypState, token_id: int, task: str) -> None:
+        if task in {"joint", "boundary_joint"}:
+            if token_id == self.eos_id: 
+                state.fsm_state = FSMState.END
+            elif token_id == self.pad_id and state.fsm_state == FSMState.START:
+                pass  
+            elif token_id == self.ent_start_id: 
+                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.ENT_DECL_SPAN, [], []
+            elif token_id == self.head_id: 
+                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.TRIPLET_HEAD_SPAN, [], []
+            elif token_id == self.type_id: 
+                if state.fsm_state == FSMState.ENT_DECL_SPAN:
+                    state.fsm_state, state.label_prefix = FSMState.TYPE_LABEL, []
+                elif state.fsm_state == FSMState.NULL_LABEL:
+                    pass
+                else:
+                    pass
+            elif token_id == self.rel_id: 
+                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
+            elif token_id == self.tail_id: 
+                state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
+            elif token_id == self.nest_id:
+                state.fsm_state = FSMState.NEST
+            elif token_id == self.null_id: 
+                state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
+            else:
+                if state.fsm_state in {FSMState.ENT_DECL_SPAN, FSMState.TRIPLET_HEAD_SPAN, FSMState.TAIL_SPAN}: 
+                    state.span_tokens.append(token_id)
+                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}: 
+                    state.label_prefix.append(token_id)
+            return
+
         if token_id == self.eos_id: 
             state.fsm_state = FSMState.END
         elif token_id == self.pad_id and state.fsm_state == FSMState.START:
@@ -314,6 +347,36 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _allowed_tokens(self, state: _HypState, hyp_idx: int) -> FrozenSet[int]:
         task, b_idx = self._tasks[self._batch_idx(hyp_idx)], self._batch_idx(hyp_idx)
         
+        if task in {"joint", "boundary_joint"}:
+            if state.fsm_state == FSMState.START: 
+                return frozenset({self.ent_start_id, self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
+            
+            if state.fsm_state == FSMState.ENT_DECL_SPAN:
+                exits = {self.type_id} if task == "joint" else {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
+                
+            if state.fsm_state == FSMState.TYPE_LABEL:
+                sentinels = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
+                return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
+                
+            if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.rel_id}) or frozenset({self.eos_id})
+                
+            if state.fsm_state == FSMState.REL_LABEL:
+                return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
+                
+            if state.fsm_state == FSMState.TAIL_SPAN:
+                exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
+                
+            if state.fsm_state == FSMState.NEST:
+                return frozenset({self.rel_id})
+                
+            if state.fsm_state == FSMState.NULL_LABEL:
+                return self._null_tries[b_idx].get_valid_next(state.label_prefix)
+                
+            return frozenset({self.eos_id, self.pad_id})
+
         if state.fsm_state == FSMState.START: 
             if task in {"re", "boundary_joint", "joint"}:
                 return frozenset({self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
@@ -365,13 +428,14 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             seq_tuple = tuple(seq)
             prev_seq_tuple = tuple(seq[:-1])
             last_token = seq[-1]
+            task = self._tasks[self._batch_idx(h)]
             if prev_seq_tuple in self._state_cache:
                 state = self._state_cache[prev_seq_tuple].clone()
-                self._transition(state, last_token)
+                self._transition(state, last_token, task)
             else:
                 state = _HypState()
                 for token in seq:
-                    self._transition(state, token)
+                    self._transition(state, token, task)
                     
             new_cache[seq_tuple] = state
 

@@ -73,6 +73,45 @@ def build_sel(
     if random_sel: 
         random.shuffle(blocks)
 
+    if task in {"joint", "boundary_joint"}:
+        parts = []
+        ent_parts = []
+        for ent in blocks:
+            if task == "joint":
+                ent_parts.extend([tok.ent_start, ent['text'], tok.type_, ent.get('type') or ''])
+            else:  # boundary_joint
+                ent_parts.extend([tok.ent_start, ent['text']])
+        if ent_parts:
+            parts.append(" ".join(ent_parts))
+
+        triplet_parts = []
+        for ent in blocks:
+            rels = list(ent["relations"]) if random_sel else ent["relations"]
+            if random_sel: 
+                random.shuffle(rels)
+            if not rels:
+                continue
+
+            ent_triplet = [tok.head, ent['text']]
+            for i, rel in enumerate(rels):
+                if i == 0:
+                    ent_triplet.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
+                else:
+                    ent_triplet.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+            triplet_parts.append(" ".join(ent_triplet))
+
+        if triplet_parts:
+            parts.append(" ".join(triplet_parts))
+
+        if use_rejection:
+            _append_null_block(
+                parts, tok, 
+                ent_types=(rejected_ent_types or []) if task in {"ner", "joint"} else [],
+                rel_types=(rejected_rel_types or []) if task in {"re", "boundary_re", "boundary_joint", "joint"} else [],
+                random_sel=random_sel
+            )
+        return " ".join(parts)
+
     parts = []
     for ent in blocks:
         rels = list(ent["relations"]) if random_sel else ent["relations"]
@@ -83,25 +122,16 @@ def build_sel(
             parts.extend([tok.ent_start, ent['text']])
             continue
 
-        if task in {"re", "boundary_re", "boundary_joint", "joint"} and not rels:
+        if task in {"re", "boundary_re"} and not rels:
             continue
 
-        if task in {"re", "boundary_re", "boundary_joint"}:
+        if task in {"re", "boundary_re"}:
             ent_parts = [tok.head, ent['text']]
             for i, rel in enumerate(rels):
                 if i == 0:
                     ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
                     ent_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
-            parts.append(" ".join(ent_parts))
-        elif task == "joint":
-            ent_parts = [tok.head, ent['text'], tok.type_, ent.get('type') or '']
-            for i, rel in enumerate(rels):
-                t_type = rel.get('tail_type') or ''
-                if i == 0:
-                    ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, t_type])
-                else:
-                    ent_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, t_type])
             parts.append(" ".join(ent_parts))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
@@ -132,6 +162,114 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
     special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
     pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
     tokens = [t.strip() for t in pattern.split(text) if t.strip()]
+
+    if tok.variant in {"joint", "boundary_joint"}:
+        state = "IDLE"
+        current_ent_text = []
+        current_ent_type = []
+        current_head_parts = []
+        current_rel_parts = []
+        current_tail_parts = []
+        current_lbl_parts = []
+        last_null = None
+
+        entity_list = []
+        entity_dict = {}
+        rejected = []
+
+        def flush_current_state():
+            nonlocal state, last_null
+            if state in {"ENT_TEXT", "ENT_TYPE"}:
+                if current_ent_text:
+                    ent_text = " ".join(current_ent_text)
+                    ent_type = " ".join(current_ent_type) if current_ent_type else None
+                    if ent_text not in entity_dict:
+                        block = {"text": ent_text, "type": ent_type, "relations": []}
+                        entity_list.append(block)
+                        entity_dict[ent_text] = block
+                    current_ent_text.clear()
+                    current_ent_type.clear()
+            elif state == "TAIL":
+                if current_head_parts and current_rel_parts and current_tail_parts:
+                    head_text = " ".join(current_head_parts)
+                    rel_type = " ".join(current_rel_parts)
+                    tail_text = " ".join(current_tail_parts)
+                    
+                    if head_text not in entity_dict:
+                        block = {"text": head_text, "type": None, "relations": []}
+                        entity_list.append(block)
+                        entity_dict[head_text] = block
+                    
+                    tail_type = entity_dict[tail_text]["type"] if tail_text in entity_dict else None
+                    
+                    entity_dict[head_text]["relations"].append({
+                        "type": rel_type,
+                        "tail": tail_text,
+                        "tail_type": tail_type
+                    })
+                    current_rel_parts.clear()
+                    current_tail_parts.clear()
+            elif state == "NULL":
+                if current_lbl_parts:
+                    label_str = " ".join(current_lbl_parts)
+                    if label_str:
+                        rejected.append({"kind": last_null or "rel", "label": label_str})
+                    current_lbl_parts.clear()
+
+        for t in tokens:
+            if t == tok.ent_start:
+                flush_current_state()
+                state = "ENT_TEXT"
+                current_ent_text.clear()
+                current_ent_type.clear()
+            elif t == getattr(tok, "head", None):
+                flush_current_state()
+                state = "HEAD"
+                current_head_parts.clear()
+            elif t == tok.type_:
+                if state == "ENT_TEXT":
+                    state = "ENT_TYPE"
+                    current_ent_type.clear()
+                elif state == "NULL":
+                    flush_current_state()
+                    last_null = "type"
+                else:
+                    pass
+            elif t == tok.rel:
+                if state == "NULL":
+                    flush_current_state()
+                    last_null = "rel"
+                else:
+                    flush_current_state()
+                    state = "REL"
+                    current_rel_parts.clear()
+            elif t == tok.tail:
+                state = "TAIL"
+                current_tail_parts.clear()
+            elif t == getattr(tok, "nest", None):
+                flush_current_state()
+                state = "IDLE"
+            elif t == tok.null:
+                flush_current_state()
+                state = "NULL"
+                last_null = None
+                current_lbl_parts.clear()
+            else:
+                if state == "ENT_TEXT":
+                    current_ent_text.append(t)
+                elif state == "ENT_TYPE":
+                    current_ent_type.append(t)
+                elif state == "HEAD":
+                    current_head_parts.append(t)
+                elif state == "REL":
+                    current_rel_parts.append(t)
+                elif state == "TAIL":
+                    current_tail_parts.append(t)
+                elif state == "NULL":
+                    current_lbl_parts.append(t)
+
+        flush_current_state()
+        return _deduplicate_entities(entity_list), rejected
 
     state = _State.IDLE
     curr_ent = None

@@ -143,7 +143,7 @@ def build_re_encoder_input(
 def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_order: bool = False, tok: AnyTokens = S2GTokens("boundary_joint"), ssi_prompt: str = "ssi") -> str:
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List relations of types [{', '.join(types)}] among the entities in the given text:"
+        prefix = f"List entities and relations of types [{', '.join(types)}] in the given text:"
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text

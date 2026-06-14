@@ -409,12 +409,11 @@ class S2GTrainer(Seq2SeqTrainer):
         else:
             jp_per_inst = [[] for _ in instances]
 
-        gold_heads_per_inst = [{r["head"]["text"] for r in inst["relations"]} for inst in instances]
         return {
             "j_per_inst": j_per_inst,
             "jp_per_inst": jp_per_inst,
-            "g_ents": [[e["text"] for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)],
-            "g_mentions": [[(e["text"], e.get("type", "")) for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)],
+            "g_ents": [[e["text"] for e in inst["entities"]] for inst in instances],
+            "g_mentions": [[(e["text"], e.get("type", "")) for e in inst["entities"]] for inst in instances],
             "g_trips": [[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances],
             "g_quints": [[(r["head"]["text"], r["head"].get("type", ""), r["type"], r["tail"]["text"], r["tail"].get("type", "")) for r in inst["relations"]] for inst in instances]
         }

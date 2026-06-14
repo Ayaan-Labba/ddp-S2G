@@ -205,7 +205,6 @@ def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_sch
         m.update(compute_metrics_for_task("boundary_joint", all_pred_triplets=[extract_triplets(j) for j in j_per_inst], all_gold_triplets=gold_trips))
     
     if use_joint:
-        gold_heads_per_inst = [{r["head"]["text"] for r in inst["relations"]} for inst in instances]
         jp_maps = [{e["text"]: e.get("type", "") for e in jp} for jp in jp_per_inst]
         m.update(compute_metrics_for_task(
             "joint", 
@@ -214,9 +213,9 @@ def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_sch
             all_pred_quintuples=[[(e["text"], jp_maps[i].get(e["text"], ""), rel["type"], rel["tail"], rel.get("tail_type") or jp_maps[i].get(rel["tail"], "")) for e in jp_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], 
             all_gold_quintuples=gold_quints, 
             all_pred_entities=[[e["text"] for e in jp] for jp in jp_per_inst], 
-            all_gold_entities=[[e["text"] for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)], 
+            all_gold_entities=[[e["text"] for e in inst["entities"]] for inst in instances], 
             all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in jp if e.get("type")] for jp in jp_per_inst], 
-            all_gold_entity_mentions=[[(e["text"], e.get("type", "")) for e in inst["entities"] if e["text"] in gold_heads_per_inst[i]] for i, inst in enumerate(instances)]
+            all_gold_entity_mentions=[[(e["text"], e.get("type", "")) for e in inst["entities"]] for inst in instances]
         ))
 
     return per_inst, m

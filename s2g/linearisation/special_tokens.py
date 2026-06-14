@@ -33,8 +33,8 @@ class S2GTokens:
             "boundary_re": {"re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
             "pipeline": {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
             "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
-            "boundary_joint": {"re", "text", "head", "rel", "tail", "nest"},
-            "joint": {"ner", "re", "text", "head", "type_", "rel", "tail", "nest"},
+            "boundary_joint": {"re", "text", "head", "rel", "tail", "nest", "ent_start"},
+            "joint": {"ner", "re", "text", "head", "type_", "rel", "tail", "nest", "ent_start"},
         }
         self._active = set(active_map.get(variant, active_map["pipeline"]))
         if use_rejection or variant != "boundary":
