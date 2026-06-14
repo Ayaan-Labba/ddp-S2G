@@ -58,6 +58,15 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
+    
+    # Ensure model parameters are explicitly cast to the configured precision
+    if cfg.train.precision == "fp32":
+        model = model.float()
+    elif cfg.train.precision == "bf16":
+        model = model.to(torch.bfloat16)
+    elif cfg.train.precision == "fp16":
+        model = model.half()
+        
     tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
 

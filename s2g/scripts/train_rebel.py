@@ -526,6 +526,14 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
     model     = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
 
+    # Ensure model parameters are explicitly cast to the configured precision
+    if cfg.train.precision == "fp32":
+        model = model.float()
+    elif cfg.train.precision == "bf16":
+        model = model.to(torch.bfloat16)
+    elif cfg.train.precision == "fp16":
+        model = model.half()
+
     # ── Special tokens ───────────────────────────────────────────────────────
     triplet_token, type_tag_map = _add_rebel_tokens(tokenizer, model, entity_schema)
     type_tags: Set[str] = set(type_tag_map.values())
@@ -534,9 +542,11 @@ def main() -> None:
     # ── Set generation config (REBEL-faithful defaults) ──────────────────────
     # Setting these on model.generation_config means Seq2SeqTrainer's
     # predict_with_generate path will pick them up automatically.
+    model.generation_config.num_beams           = cfg.generation.num_beams
     model.generation_config.length_penalty       = cfg.generation.length_penalty
     model.generation_config.no_repeat_ngram_size = cfg.generation.no_repeat_ngram_size
     model.generation_config.early_stopping       = cfg.generation.early_stopping
+
     # Explicitly suppress any forced_bos that some BART checkpoints set,
     # since we are generating a custom-token sequence.
     if hasattr(model.generation_config, "forced_bos_token_id"):
