@@ -106,15 +106,18 @@ def add_special_tokens_to_tokenizer(
         }
         
         with torch.no_grad():
-            embeddings = model.get_input_embeddings().weight
+            in_emb  = model.get_input_embeddings().weight
+            out_mod = model.get_output_embeddings()
+            out_emb = out_mod.weight if out_mod is not None else None
             for special_tok, init_text in token_map.items():
                 if special_tok not in tokens._active:
                     continue
                 new_id = tokenizer.convert_tokens_to_ids(special_tok)
                 init_ids = tokenizer.encode(init_text, add_special_tokens=False)
                 if init_ids and new_id != tokenizer.unk_token_id:
-                    init_embs = embeddings[init_ids].mean(dim=0)
-                    embeddings[new_id].copy_(init_embs)
+                    in_emb[new_id].copy_(in_emb[init_ids].mean(dim=0))
+                    if out_emb is not None and out_emb.data_ptr() != in_emb.data_ptr():
+                        out_emb[new_id].copy_(out_emb[init_ids].mean(dim=0))
 
     return num_added
 
