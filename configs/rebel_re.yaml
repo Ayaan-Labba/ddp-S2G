@@ -1,0 +1,105 @@
+# =============================================================================
+# REBEL-format RE — CoNLL04 config
+# =============================================================================
+#
+# Linearisation
+# -------------
+# Identical to REBEL's conll04_typed.py:
+#   <triplet> HEAD <HEAD_TYPE> TAIL <TAIL_TYPE> REL_TEXT
+#   [<HEAD_TYPE> TAIL2 <TAIL2_TYPE> REL2 ...]  ← same head, additional tails
+# Entity type tags (<person>, <organization>, …) are derived from the entity
+# schema and added as new vocabulary tokens.
+# Encoder input: raw source text — no SSI schema prompts.
+#
+# Backbone options
+# ----------------
+#   facebook/bart-large    REBEL's original backbone (~400M)
+#   google/flan-t5-base    Lighter alternative (~250M)
+#   google/flan-t5-large   Same size as BART-large
+#
+# To train with Flan-T5-base instead of BART-large, run:
+#   python -m s2g.scripts.train_rebel --config configs/tasks/rebel_re/conll04.yaml \
+#       model.name=google/flan-t5-base \
+#       data.output_dir=outputs/rebel_re/t5-conll04
+#
+# Hyperparameters
+# ---------------
+# Sourced directly from REBEL's conll04_train.yaml and default_train.yaml:
+#   - effective batch size: 8 (per-device) × 4 (grad-accum) = 32
+#   - optimizer: AdamW, lr=5e-5, weight_decay=0.01  ← 0.01, not 0.0!
+#   - scheduler: linear decay with 100 warm-up steps
+#   - max_steps: 1000  (≈ 8–9 epochs over 922 train sentences at batch=8)
+#   - eval_beams: 3
+#   - generation: length_penalty=0, no_repeat_ngram_size=0, early_stopping=False
+#   - seed: 42
+# =============================================================================
+
+model:
+  # Switch between BART-large (REBEL original) and Flan-T5 via CLI override.
+  name: facebook/bart-large
+  pretrained_checkpoint: null    # Set to resume from a fine-tuned checkpoint
+
+tokenization:
+  # REBEL's CoNLL04 settings.  Source length 1024 is generous for sentence-level
+  # RE; 128 is sufficient for the short typed linearisation.
+  max_source_length: 1024
+  max_target_length: 128
+
+optimizer:
+  optim: adamw_torch
+  lr: 5.0e-5                   # REBEL: learning_rate: 0.00005
+  weight_decay: 0.01           # REBEL: weight_decay: 0.01 (not the S2G default of 0.0)
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+scheduler:
+  type: linear                 # REBEL CoNLL04: lr_scheduler: "linear"
+  warmup_steps: 100            # REBEL CoNLL04: warmup_steps: 100
+
+train:
+  # 922 train sentences, micro-batch 8, grad-accum 4 → ~29 optimizer steps/epoch
+  # 1000 steps ≈ 34 epochs (REBEL uses max_steps: 1000 with batch 8 / accum 4)
+  max_steps: 1000
+  batch_size: 8                # Per-device micro-batch (= REBEL train_batch_size)
+  gradient_acc_steps: 4        # Effective batch = 8 × 4 = 32
+  gradient_clip_value: 1.0     # REBEL: max_grad_norm: 1.0
+  gradient_checkpointing: false
+  precision: "fp32"              # Change to fp16 if GPU does not support bf16
+  seed: 42                     # REBEL: seed: 42
+
+validation:
+  # Validate every 50 optimizer steps (~1.7 effective epochs).
+  # REBEL's val_check_interval=1.0 means once per full epoch; we approximate
+  # this with frequent short evals to get good early-stopping resolution.
+  check_interval: 50
+  percent_check: 1.0           # Evaluate on full validation set
+  batch_size: 128
+  early_stopping_patience: 10
+  early_stopping_metric: strict_f1   # REBEL's val_F1_micro (strict mode)
+
+generation:
+  num_beams: 3                 # REBEL CoNLL04: eval_beams: 3
+  length_penalty: 0.0          # REBEL: no length bias (structured output)
+  no_repeat_ngram_size: 0      # REBEL: entity spans may legitimately repeat
+  early_stopping: false        # REBEL: do not truncate output prematurely
+
+checkpoint:
+  save_top_k: 1                # REBEL: save_top_k: 1
+  resume_from: null
+
+wandb:
+  project: rebel-re
+  entity: null
+  run_name: rebel-re-bart-conll04   # Override with t5 / large etc. as needed
+
+data:
+  data_dir: data/conll04
+  schema_file: data/conll04/relation.schema
+  entity_schema_file: data/conll04/entity.schema
+  output_dir: outputs/rebel_re/bart-conll04
+
+hardware:
+  num_workers: 4
+  persistent_workers: true
+  gpu_ids: [0]                # null = use all visible GPUs; [0] = first GPU only
