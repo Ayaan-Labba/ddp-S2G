@@ -158,15 +158,41 @@ class FSMState(Enum):
     TRIP_AND_EXPECTED = auto()
     TRIP_NULL = auto()
 
+
+class REState(Enum):
+    START = auto()
+    EXPECT_TRIPLET_START = auto()
+    HEAD_SPAN = auto()
+    EXPECT_TYPE_SEP = auto()
+    TYPE_LABEL = auto()
+    EXPECT_ELEMENT_SEP_1 = auto()
+    REL_LABEL = auto()
+    EXPECT_ELEMENT_SEP_2 = auto()
+    TAIL_SPAN = auto()
+    EXPECT_TYPE_SEP_2 = auto()
+    TAIL_TYPE_LABEL = auto()
+    EXPECT_TRIPLET_END_OR_NEXT = auto()
+    EXPECT_EOS = auto()
+    END = auto()
+
+
 @dataclass
 class _HypState:
     fsm_state: FSMState = FSMState.START
     span_tokens: List[int] = field(default_factory=list)
     label_prefix: List[int] = field(default_factory=list)
+    re_state: REState = REState.START
+    re_match_buffer: List[int] = field(default_factory=list)
     
     def clone(self) -> '_HypState':
         """Deep copy for state transition caching."""
-        return _HypState(self.fsm_state, self.span_tokens.copy(), self.label_prefix.copy())
+        return _HypState(
+            self.fsm_state, 
+            self.span_tokens.copy(), 
+            self.label_prefix.copy(), 
+            self.re_state, 
+            self.re_match_buffer.copy()
+        )
 
 
 class ConstraintDecodingProcessor(LogitsProcessor):
@@ -186,9 +212,26 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
         self.and_tokens = frozenset(tokenizer.encode(" and", add_special_tokens=False) + tokenizer.encode("and", add_special_tokens=False))
 
+        # Encode structural markers
+        def get_suffix_ids(suffix: str) -> List[int]:
+            a_ids = tokenizer.encode("a", add_special_tokens=False)
+            full_ids = tokenizer.encode("a" + suffix, add_special_tokens=False)
+            return full_ids[len(a_ids):]
+
+        self.re_prefix_seq = tokenizer.encode("Relations:", add_special_tokens=False)
+        self.re_triplet_start_seq = tokenizer.encode(" [[", add_special_tokens=False)
+        if not self.re_triplet_start_seq:
+            self.re_triplet_start_seq = tokenizer.encode("[[", add_special_tokens=False)
+            
+        self.re_type_sep_seq = get_suffix_ids(":")
+        self.re_element_sep_seq = get_suffix_ids(", ")
+        self.re_triplet_end_seq = get_suffix_ids("]]")
+        self.re_next_triplet_start_seq = get_suffix_ids("]], [[")
+
         self._special_ids = frozenset(v for v in tid.values() if v is not None) | {self.eos_id, self.pad_id}
 
         self._source_token_sets, self._source_lists, self._token_to_positions = [], [], []
+        self._equiv_maps = []
         for b in range(self._batch_size):
             src = source_ids[b].tolist()
             self._source_token_sets.append(frozenset(set(src) - self._special_ids))
@@ -197,6 +240,28 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             for i, token in enumerate(src): 
                 pos_map.setdefault(token, []).append(i)
             self._token_to_positions.append(pos_map)
+
+            # Build equivalence map for SentencePiece space/no-space mismatch
+            equiv_map = {}
+            a_ids = tokenizer.encode("a", add_special_tokens=False)
+            for t in set(src):
+                if t in self._special_ids:
+                    continue
+                try:
+                    word = tokenizer.decode([t])
+                    word_clean = word.strip()
+                    if not word_clean:
+                        continue
+                    ids_no_space = tokenizer.encode("a" + word_clean, add_special_tokens=False)[len(a_ids):]
+                    ids_with_space = tokenizer.encode(" " + word_clean, add_special_tokens=False)
+                    equivs = {t}
+                    if ids_no_space: equivs.add(ids_no_space[0])
+                    if ids_with_space: equivs.add(ids_with_space[0])
+                    for eq in equivs:
+                        equiv_map[eq] = equivs
+                except Exception:
+                    pass
+            self._equiv_maps.append(equiv_map)
 
         self._tasks, self._ent_type_tries, self._rel_tries, self._null_tries, self._tail_type_tries = [], [], [], [], []
         for b in range(self._batch_size):
@@ -255,23 +320,42 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
             # If e_seqs is empty and entity_schema is available, tokenize the schema
             if not e_seqs and entity_schema and task in {"ner", "joint", "re"}:
-                e_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in entity_schema]
+                if task == "re":
+                    e_seqs = [tokenizer.encode("a" + t, add_special_tokens=False)[len(a_ids):] for t in entity_schema]
+                else:
+                    e_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in entity_schema]
                 
             # If r_seqs is empty and rel_schema is available, tokenize the schema
             if not r_seqs and rel_schema and task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
-                r_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in rel_schema]
+                if task in {"re", "boundary_re"}:
+                    r_seqs = [tokenizer.encode(" " + t, add_special_tokens=False) for t in rel_schema]
+                else:
+                    r_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in rel_schema]
 
             self._tasks.append(task)
             
+            # Setup sentinels for tries based on format
+            if task == "re":
+                ent_type_sentinel = {self.re_element_sep_seq[0]}
+                tail_type_sentinel = {self.re_triplet_end_seq[0]}
+            else:
+                ent_type_sentinel = {self.rel_id} if task in {"joint", "pipeline_re"} else ({self.sep_id} if task == "re" else self._get_inter_tokens(task))
+                tail_type_sentinel = {self.sep_id, self.trip_id, self.null_id, self.eos_id} if task == "re" else {self.nest_id, self.head_id, self.null_id, self.eos_id}
+
+            if task in {"re", "boundary_re"}:
+                rel_sentinel = {self.re_element_sep_seq[0]}
+            else:
+                rel_sentinel = {self.tail_id}
+
             self._ent_type_tries.append(
-                Trie(e_seqs, {self.rel_id} if task in {"joint", "pipeline_re"} else ({self.sep_id} if task == "re" else self._get_inter_tokens(task)))
+                Trie(e_seqs, ent_type_sentinel)
                 if task in {"ner", "joint", "re", "pipeline_re"} else None
             )
             self._tail_type_tries.append(
-                Trie(e_seqs, {self.sep_id, self.trip_id, self.null_id, self.eos_id} if task == "re" else {self.nest_id, self.head_id, self.null_id, self.eos_id})
+                Trie(e_seqs, tail_type_sentinel)
                 if task in {"joint", "re", "pipeline_re"} else None
             )
-            self._rel_tries.append(Trie(r_seqs, {self.tail_id}) if task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else None)
+            self._rel_tries.append(Trie(r_seqs, rel_sentinel) if task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else None)
             
             null_map = {
                 "ner": (e_seqs, {self.null_id, self.eos_id}), 
@@ -291,15 +375,36 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         return hyp_idx // self.num_beams
 
     def _source_copy_next(self, batch_idx: int, span_tokens: List[int]) -> FrozenSet[int]:
+        equiv_map = self._equiv_maps[batch_idx]
         if not span_tokens: 
-            return self._source_token_sets[batch_idx]
+            allowed = set()
+            for t in self._source_token_sets[batch_idx]:
+                allowed.update(equiv_map.get(t, {t}))
+            return frozenset(allowed)
         
         src, n = self._source_lists[batch_idx], len(span_tokens)
-        return frozenset(
-            src[p + 1] for p in self._token_to_positions[batch_idx].get(span_tokens[-1], [])
-            if p - n + 1 >= 0 and src[p - n + 1 : p + 1] == span_tokens 
-            and p + 1 < len(src) and src[p + 1] not in self._special_ids
-        )
+        last_tok = span_tokens[-1]
+        last_tok_equivs = equiv_map.get(last_tok, {last_tok})
+        positions = []
+        for eq in last_tok_equivs:
+            positions.extend(self._token_to_positions[batch_idx].get(eq, []))
+            
+        valid_next = set()
+        for p in positions:
+            if p - n + 1 >= 0 and p + 1 < len(src):
+                match = True
+                for i in range(n):
+                    src_t = src[p - n + 1 + i]
+                    span_t = span_tokens[i]
+                    if src_t != span_t and span_t not in equiv_map.get(src_t, {src_t}):
+                        match = False
+                        break
+                if match:
+                    next_t = src[p + 1]
+                    if next_t not in self._special_ids:
+                        valid_next.update(equiv_map.get(next_t, {next_t}))
+                        
+        return frozenset(valid_next)
 
     def _get_inter_tokens(self, task: str) -> Set[int]:
         if task == "boundary":
@@ -320,39 +425,131 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _transition(self, state: _HypState, token_id: int, task: str) -> None:
         if task in {"re", "boundary_re"}:
             if token_id == self.eos_id:
-                state.fsm_state = FSMState.END
-            elif token_id == self.pad_id and state.fsm_state == FSMState.START:
-                pass
-            elif token_id == self.trip_id:
-                state.fsm_state, state.span_tokens = FSMState.TRIP_HEAD_SPAN, []
-            elif token_id == self.null_id:
-                state.fsm_state = FSMState.TRIP_NULL
-            elif state.fsm_state == FSMState.TRIP_NULL:
-                pass # Accept anything after null until EOS
-            elif token_id == self.type_id and task == "re":
-                if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_HTYPE, []
-                elif state.fsm_state == FSMState.TRIP_TAIL_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_TTYPE, []
-            elif token_id == self.sep_id:
-                if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_REL, []
-                elif state.fsm_state == FSMState.TRIP_HTYPE:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_REL, []
-                elif state.fsm_state == FSMState.TRIP_REL:
-                    state.fsm_state, state.span_tokens = FSMState.TRIP_TAIL_SPAN, []
-                elif state.fsm_state == FSMState.TRIP_TAIL_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_AND_EXPECTED, []
-                elif state.fsm_state == FSMState.TRIP_TTYPE:
-                    state.fsm_state = FSMState.TRIP_AND_EXPECTED
-                elif state.fsm_state == FSMState.TRIP_AND_EXPECTED:
-                    # we just received the <sep> after "and"
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_REL, []
-            else:
-                if state.fsm_state in {FSMState.TRIP_HEAD_SPAN, FSMState.TRIP_TAIL_SPAN}:
+                state.re_state = REState.END
+                return
+            elif token_id == self.pad_id and state.re_state == REState.START:
+                return
+
+            if state.re_state == REState.START:
+                if token_id == self.re_prefix_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_prefix_seq):
+                        state.re_state = REState.EXPECT_TRIPLET_START
+                        state.re_match_buffer.clear()
+
+            elif state.re_state == REState.EXPECT_TRIPLET_START:
+                if token_id == self.re_triplet_start_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_triplet_start_seq):
+                        state.re_state = REState.HEAD_SPAN
+                        state.re_match_buffer.clear()
+                        state.span_tokens.clear()
+
+            elif state.re_state == REState.HEAD_SPAN:
+                sep_seq = self.re_type_sep_seq if task == "re" else self.re_element_sep_seq
+                if token_id == sep_seq[0]:
+                    state.re_match_buffer = [token_id]
+                    if len(state.re_match_buffer) == len(sep_seq):
+                        state.re_state = REState.TYPE_LABEL if task == "re" else REState.REL_LABEL
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+                    else:
+                        state.re_state = REState.EXPECT_TYPE_SEP if task == "re" else REState.EXPECT_ELEMENT_SEP_1
+                else:
                     state.span_tokens.append(token_id)
-                elif state.fsm_state in {FSMState.TRIP_HTYPE, FSMState.TRIP_REL, FSMState.TRIP_TTYPE}:
+
+            elif state.re_state == REState.EXPECT_TYPE_SEP:
+                if token_id == self.re_type_sep_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_type_sep_seq):
+                        state.re_state = REState.TYPE_LABEL
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+
+            elif state.re_state == REState.TYPE_LABEL:
+                if token_id == self.re_element_sep_seq[0]:
+                    state.re_match_buffer = [token_id]
+                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
+                        state.re_state = REState.REL_LABEL
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+                    else:
+                        state.re_state = REState.EXPECT_ELEMENT_SEP_1
+                else:
                     state.label_prefix.append(token_id)
+
+            elif state.re_state == REState.EXPECT_ELEMENT_SEP_1:
+                if token_id == self.re_element_sep_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
+                        state.re_state = REState.REL_LABEL
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+
+            elif state.re_state == REState.REL_LABEL:
+                if token_id == self.re_element_sep_seq[0]:
+                    state.re_match_buffer = [token_id]
+                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
+                        state.re_state = REState.TAIL_SPAN
+                        state.re_match_buffer.clear()
+                        state.span_tokens.clear()
+                    else:
+                        state.re_state = REState.EXPECT_ELEMENT_SEP_2
+                else:
+                    state.label_prefix.append(token_id)
+
+            elif state.re_state == REState.EXPECT_ELEMENT_SEP_2:
+                if token_id == self.re_element_sep_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
+                        state.re_state = REState.TAIL_SPAN
+                        state.re_match_buffer.clear()
+                        state.span_tokens.clear()
+
+            elif state.re_state == REState.TAIL_SPAN:
+                sep_seq = self.re_type_sep_seq if task == "re" else self.re_triplet_end_seq
+                if token_id == sep_seq[0]:
+                    state.re_match_buffer = [token_id]
+                    if len(state.re_match_buffer) == len(sep_seq):
+                        state.re_state = REState.TAIL_TYPE_LABEL if task == "re" else REState.EXPECT_EOS
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+                    else:
+                        state.re_state = REState.EXPECT_TYPE_SEP_2 if task == "re" else REState.EXPECT_TRIPLET_END_OR_NEXT
+                else:
+                    state.span_tokens.append(token_id)
+
+            elif state.re_state == REState.EXPECT_TYPE_SEP_2:
+                if token_id == self.re_type_sep_seq[len(state.re_match_buffer)]:
+                    state.re_match_buffer.append(token_id)
+                    if len(state.re_match_buffer) == len(self.re_type_sep_seq):
+                        state.re_state = REState.TAIL_TYPE_LABEL
+                        state.re_match_buffer.clear()
+                        state.label_prefix.clear()
+
+            elif state.re_state == REState.TAIL_TYPE_LABEL:
+                if token_id == self.re_triplet_end_seq[0]:
+                    state.re_match_buffer = [token_id]
+                    if len(state.re_match_buffer) == len(self.re_triplet_end_seq):
+                        state.re_state = REState.EXPECT_EOS
+                        state.re_match_buffer.clear()
+                    else:
+                        state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
+                else:
+                    state.label_prefix.append(token_id)
+
+            elif state.re_state == REState.EXPECT_TRIPLET_END_OR_NEXT:
+                state.re_match_buffer.append(token_id)
+                if state.re_match_buffer == self.re_triplet_end_seq:
+                    state.re_state = REState.EXPECT_EOS
+                    state.re_match_buffer.clear()
+                elif state.re_match_buffer == self.re_next_triplet_start_seq:
+                    state.re_state = REState.HEAD_SPAN
+                    state.re_match_buffer.clear()
+                    state.span_tokens.clear()
+
+            elif state.re_state == REState.EXPECT_EOS:
+                pass
             return
 
         if task in {"joint", "boundary_joint"}:
@@ -418,35 +615,54 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         task, b_idx = self._tasks[self._batch_idx(hyp_idx)], self._batch_idx(hyp_idx)
         
         if task in {"re", "boundary_re"}:
-            if state.fsm_state == FSMState.START:
-                return frozenset({self.trip_id, self.eos_id} | {self.null_id})
+            if state.re_state == REState.START:
+                return frozenset({self.re_prefix_seq[len(state.re_match_buffer)]})
                 
-            if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
-                exits = {self.type_id} if task == "re" else {self.sep_id}
+            if state.re_state == REState.EXPECT_TRIPLET_START:
+                return frozenset({self.re_triplet_start_seq[len(state.re_match_buffer)]})
+                
+            if state.re_state == REState.HEAD_SPAN:
+                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_element_sep_seq[0]}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
-            if state.fsm_state == FSMState.TRIP_HTYPE:
-                return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset({self.sep_id})
+            if state.re_state == REState.EXPECT_TYPE_SEP:
+                return frozenset({self.re_type_sep_seq[len(state.re_match_buffer)]})
                 
-            if state.fsm_state == FSMState.TRIP_REL:
-                return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.sep_id})
+            if state.re_state == REState.TYPE_LABEL:
+                sentinels = {self.re_element_sep_seq[0]}
+                return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
                 
-            if state.fsm_state == FSMState.TRIP_TAIL_SPAN:
-                exits = {self.type_id} if task == "re" else {self.sep_id, self.trip_id, self.null_id, self.eos_id}
+            if state.re_state == REState.EXPECT_ELEMENT_SEP_1:
+                return frozenset({self.re_element_sep_seq[len(state.re_match_buffer)]})
+                
+            if state.re_state == REState.REL_LABEL:
+                sentinels = {self.re_element_sep_seq[0]}
+                return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset(sentinels)
+                
+            if state.re_state == REState.EXPECT_ELEMENT_SEP_2:
+                return frozenset({self.re_element_sep_seq[len(state.re_match_buffer)]})
+                
+            if state.re_state == REState.TAIL_SPAN:
+                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_triplet_end_seq[0]}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
-            if state.fsm_state == FSMState.TRIP_TTYPE:
-                return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset({self.sep_id, self.trip_id, self.null_id, self.eos_id})
+            if state.re_state == REState.EXPECT_TYPE_SEP_2:
+                return frozenset({self.re_type_sep_seq[len(state.re_match_buffer)]})
                 
-            if state.fsm_state == FSMState.TRIP_AND_EXPECTED:
-                # Can be "and", or <trip>, or <null>, or <eos>
-                # "and" tokens are allowed. We also need to allow <sep> if the model has generated "and" and is ready to close.
-                # Since we don't strictly track the exact sub-tokens of "and", we allow and_tokens + sep_id + trip_id + null_id + eos_id
-                return frozenset(self.and_tokens | {self.sep_id, self.trip_id, self.null_id, self.eos_id})
+            if state.re_state == REState.TAIL_TYPE_LABEL:
+                sentinels = {self.re_triplet_end_seq[0]}
+                return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
-            if state.fsm_state == FSMState.TRIP_NULL:
-                # Any valid vocab token is allowed until EOS
-                return frozenset() # We will handle this by returning a full set of vocab, or just not masking anything in the caller
+            if state.re_state == REState.EXPECT_TRIPLET_END_OR_NEXT:
+                allowed = set()
+                if len(state.re_match_buffer) < len(self.re_triplet_end_seq):
+                    allowed.add(self.re_triplet_end_seq[len(state.re_match_buffer)])
+                if len(state.re_match_buffer) < len(self.re_next_triplet_start_seq):
+                    allowed.add(self.re_next_triplet_start_seq[len(state.re_match_buffer)])
+                return frozenset(allowed)
+                
+            if state.re_state == REState.EXPECT_EOS:
+                return frozenset({self.eos_id})
                 
             return frozenset({self.eos_id, self.pad_id})
             

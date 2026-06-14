@@ -143,19 +143,20 @@ def build_sel(
                         ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
             parts.append(" ".join(ent_parts))
         elif task in {"re", "boundary_re"}:
-            ent_parts = []
-            for i, rel in enumerate(rels):
-                if i == 0 or not use_nesting:
-                    ent_parts.extend([tok.trip, ent['text']])
+            triplets = []
+            for ent in blocks:
+                rels = list(ent["relations"]) if random_sel else ent["relations"]
+                if random_sel:
+                    random.shuffle(rels)
+                for rel in rels:
                     if task == "re":
-                        ent_parts.extend([tok.type_, ent.get('type') or ''])
-                else:
-                    ent_parts.extend([tok.sep, "and"])
-                    
-                ent_parts.extend([tok.sep, rel['type'], tok.sep, rel['tail']])
-                if task == "re":
-                    ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
-            parts.append(" ".join(ent_parts))
+                        head_type = ent.get("type") or ""
+                        tail_type = rel.get("tail_type") or ""
+                        triplets.append(f"[[{ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type}]]")
+                    else:
+                        triplets.append(f"[[{ent['text']}, {rel['type']}, {rel['tail']}]]")
+            if triplets:
+                parts.append("Relations: " + ", ".join(triplets))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
             parts.append(" ".join(ent_parts))
@@ -303,58 +304,55 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         flush_current_state()
         return _deduplicate_entities(entity_list), rejected
 
-    if tok.trip is not None and tok.trip in tokens:
+    if tok.variant in {"re", "boundary_re"}:
         entities: List[EntityBlock] = []
         entity_dict: Dict[str, EntityBlock] = {}
         rejected: List[RejectedItem] = []
         
-        has_types = tok.variant in {"re", "pipeline"}
-        data_tokens = [t for t in tokens if t not in {tok.sep, tok.type_}]
+        has_types = tok.variant == "re"
         
-        state = "IDLE"
-        curr_head = None
-        curr_rel = None
-        curr_tail = None
-        
-        for t in data_tokens:
-            if t == tok.trip:
-                state = "EXPECT_HEAD"
-            elif t == tok.null:
-                break
-            elif state == "EXPECT_HEAD":
-                curr_head = t
-                if curr_head not in entity_dict:
-                    entity_dict[curr_head] = {"text": curr_head, "type": None, "relations": []}
-                    entities.append(entity_dict[curr_head])
-                state = "EXPECT_HTYPE" if has_types else "EXPECT_REL"
-            elif state == "EXPECT_HTYPE":
-                if curr_head in entity_dict:
-                    entity_dict[curr_head]["type"] = t
-                state = "EXPECT_REL"
-            elif state == "EXPECT_REL":
-                if t == "and":
-                    continue
-                curr_rel = t
-                state = "EXPECT_TAIL"
-            elif state == "EXPECT_TAIL":
-                curr_tail = t
-                if not has_types:
-                    if curr_head in entity_dict:
-                        entity_dict[curr_head]["relations"].append({"type": curr_rel, "tail": curr_tail, "tail_type": None})
-                    state = "EXPECT_AND"
+        triplets = re.findall(r"\[\[(.*?)\]\]", text)
+        for trip in triplets:
+            parts = [p.strip() for p in trip.split(",")]
+            if len(parts) != 3:
+                continue
+            head_str, rel, tail_str = parts[0], parts[1], parts[2]
+            if not head_str or not rel or not tail_str:
+                continue
+                
+            if has_types:
+                if ":" in head_str:
+                    head, head_type = head_str.rsplit(":", 1)
                 else:
-                    state = "EXPECT_TTYPE"
-            elif state == "EXPECT_TTYPE":
-                if curr_head in entity_dict:
-                    entity_dict[curr_head]["relations"].append({"type": curr_rel, "tail": curr_tail, "tail_type": t})
-                state = "EXPECT_AND"
-            elif state == "EXPECT_AND":
-                if t == "and":
-                    state = "EXPECT_REL"
-                else:
-                    curr_rel = t
-                    state = "EXPECT_TAIL"
+                    head, head_type = head_str, None
                     
+                if ":" in tail_str:
+                    tail, tail_type = tail_str.rsplit(":", 1)
+                else:
+                    tail, tail_type = tail_str, None
+            else:
+                head, head_type = head_str, None
+                tail, tail_type = tail_str, None
+                
+            head = head.strip()
+            tail = tail.strip()
+            rel = rel.strip()
+            if head_type: head_type = head_type.strip()
+            if tail_type: tail_type = tail_type.strip()
+            
+            if head not in entity_dict:
+                entity_dict[head] = {"text": head, "type": head_type, "relations": []}
+                entities.append(entity_dict[head])
+            else:
+                if head_type and not entity_dict[head].get("type"):
+                    entity_dict[head]["type"] = head_type
+                    
+            entity_dict[head]["relations"].append({
+                "type": rel,
+                "tail": tail,
+                "tail_type": tail_type
+            })
+            
         return _deduplicate_entities(entities), rejected
 
     state = _State.IDLE
