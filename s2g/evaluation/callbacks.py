@@ -61,11 +61,25 @@ class GenerateTextSamplesCallback(TrainerCallback):
             return
         
         try: 
-            self._log_samples(model, state)
+            self._log_samples(model, state, is_initial=False)
         except Exception: 
             logger.exception("GenerateTextSamplesCallback failed at step %d.", state.global_step)
 
-    def _log_samples(self, model: Any, state: TrainerState) -> None:
+    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: Optional[Any] = None, **kwargs: Any) -> None:
+        if not state.is_world_process_zero: 
+            return
+            
+        if model is None: 
+            logger.warning("GenerateTextSamplesCallback: no model at train begin.")
+            return
+            
+        try: 
+            self._log_samples(model, state, is_initial=True)
+            self._last_logged = 0
+        except Exception: 
+            logger.exception("GenerateTextSamplesCallback failed at train begin.")
+
+    def _log_samples(self, model: Any, state: TrainerState, is_initial: bool = False) -> None:
         try: 
             import wandb
         except ImportError: 
@@ -97,8 +111,21 @@ class GenerateTextSamplesCallback(TrainerCallback):
         pred_texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=False)
         gold_texts = self.tokenizer.batch_decode(g_ids, skip_special_tokens=False)
 
+        # Get prompts
+        prompts = []
+        for seq in input_ids:
+            seq_nopad = seq[seq != pad_id]
+            prompts.append(self.tokenizer.decode(seq_nopad, skip_special_tokens=False))
+
         specials_to_remove = [t for t in (self.tokenizer.pad_token, self.tokenizer.eos_token, self.tokenizer.bos_token) if t]
         rows = []
+        
+        cols = ["Source", "Encoder Input"]
+        if self._task in {"ner", "joint", "boundary_joint", "boundary"}:
+            cols.extend(["Predicted Entities", "Gold Entities"])
+        if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
+            cols.extend(["Predicted Triplets", "Gold Triplets"])
+        cols.extend(["Predicted SEL", "Gold SEL"])
         
         for i, inst in enumerate(self.sample_batch):
             p_sel, g_sel = pred_texts[i], gold_texts[i]
@@ -113,22 +140,32 @@ class GenerateTextSamplesCallback(TrainerCallback):
             p_ent, _ = parse_sel(p_sel, tok=self._tok)
             g_ent, _ = parse_sel(g_sel, tok=self._tok)
 
-            rows.append([
-                inst["text"], 
-                _format_output(self._task, p_ent, extract_triplets(p_ent)),
-                _format_output(self._task, g_ent, extract_triplets(g_ent)), 
-                p_sel, 
-                g_sel
-            ])
+            row = [inst["text"], prompts[i]]
+            
+            if self._task in {"ner", "joint", "boundary_joint"}:
+                p_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in p_ent]) if p_ent else "(none)"
+                g_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in g_ent]) if g_ent else "(none)"
+                row.extend([p_e, g_e])
+            elif self._task == "boundary":
+                p_e = "\n".join([e['text'] for e in p_ent]) if p_ent else "(none)"
+                g_e = "\n".join([e['text'] for e in g_ent]) if g_ent else "(none)"
+                row.extend([p_e, g_e])
+                
+            if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
+                p_triplets = extract_triplets(p_ent, include_types=(self._task == "re"))
+                g_triplets = extract_triplets(g_ent, include_types=(self._task == "re"))
+                p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
+                g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
+                row.extend([p_t, g_t])
+                
+            row.extend([p_sel, g_sel])
+            rows.append(row)
 
         wandb.log(
-            {f"samples/{self._task}": wandb.Table(
-                columns=["Source", "Predicted", "Gold", "Predicted SEL", "Gold SEL"], 
-                data=rows
-            )}, 
-            step=state.global_step
+            {f"samples/{self._task}": wandb.Table(columns=cols, data=rows)}, 
+            step=0 if is_initial else state.global_step
         )
-        logger.info("Logged %d %s samples to W&B at step %d.", len(rows), self._task, state.global_step)
+        logger.info("Logged %d %s samples to W&B at step %d.", len(rows), self._task, 0 if is_initial else state.global_step)
 
 
 class PeriodicCheckpointCallback(TrainerCallback):
@@ -151,12 +188,7 @@ class PeriodicCheckpointCallback(TrainerCallback):
                 json.dump({"wandb_run_id": self.wandb_run_id, "last_step": state.global_step}, f, indent=2)
 
 
-def _format_output(task: str, entities: List[Dict], triplets: List[tuple]) -> str:
-    if task == "boundary": 
-        return "\n".join([e["text"] for e in entities]) if entities else "(none)"
-    if task == "ner": 
-        return "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in entities]) if entities else "(none)"
-    return "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in triplets]) if triplets else "(none)"
+
 
 
 def load_run_metadata(output_dir: str) -> Optional[Dict[str, Any]]:

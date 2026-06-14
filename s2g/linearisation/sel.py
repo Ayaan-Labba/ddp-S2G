@@ -121,29 +121,55 @@ def build_sel(
         if task == "boundary":
             parts.extend([tok.ent_start, ent['text']])
             continue
-
-        if task in {"re", "boundary_re"} and not rels:
+        
+        if task in {"re", "boundary_re", "pipeline_re", "pipeline_boundary_re"} and not rels:
             continue
 
-        if task in {"re", "boundary_re"}:
+        if task in {"pipeline_re", "pipeline_boundary_re"}:
             ent_parts = [tok.head, ent['text']]
+            if task == "pipeline_re":
+                ent_parts.extend([tok.type_, ent.get('type') or ''])
             for i, rel in enumerate(rels):
                 if i == 0:
                     ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
+                    if task == "pipeline_re":
+                        ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
                 else:
                     ent_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                    if task == "pipeline_re":
+                        ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
+            parts.append(" ".join(ent_parts))
+        elif task in {"re", "boundary_re"}:
+            ent_parts = [tok.trip, ent['text']]
+            if task == "re":
+                ent_parts.extend([tok.sep, ent.get('type') or ''])
+            for i, rel in enumerate(rels):
+                if i > 0:
+                    ent_parts.extend([tok.sep, "and"])
+                ent_parts.extend([tok.sep, rel['type'], tok.sep, rel['tail']])
+                if task == "re":
+                    ent_parts.extend([tok.sep, rel.get('tail_type') or ''])
             parts.append(" ".join(ent_parts))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
             parts.append(" ".join(ent_parts))
 
     if task != "boundary" and use_rejection:
-        _append_null_block(
-            parts, tok, 
-            ent_types=(rejected_ent_types or []) if task in {"ner", "joint"} else [],
-            rel_types=(rejected_rel_types or []) if task in {"re", "boundary_re", "boundary_joint", "joint"} else [],
-            random_sel=random_sel
-        )
+        if task in {"re", "boundary_re"}:
+            if rejected_rel_types:
+                r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
+                if len(r_types) > 1:
+                    missing_str = ", ".join(r_types[:-1]) + f" and {r_types[-1]}"
+                else:
+                    missing_str = r_types[0]
+                parts.append(f"{tok.null} missing relations: {missing_str}.")
+        else:
+            _append_null_block(
+                parts, tok, 
+                ent_types=(rejected_ent_types or []) if task in {"ner", "joint", "pipeline_re"} else [],
+                rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else [],
+                random_sel=random_sel
+            )
 
     return " ".join(parts)
 
@@ -271,6 +297,60 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         flush_current_state()
         return _deduplicate_entities(entity_list), rejected
 
+    if tok.trip is not None and tok.trip in tokens:
+        entities: List[EntityBlock] = []
+        entity_dict: Dict[str, EntityBlock] = {}
+        rejected: List[RejectedItem] = []
+        
+        has_types = tok.variant in {"re", "pipeline"}
+        data_tokens = [t for t in tokens if t != tok.sep]
+        
+        state = "IDLE"
+        curr_head = None
+        curr_rel = None
+        curr_tail = None
+        
+        for t in data_tokens:
+            if t == tok.trip:
+                state = "EXPECT_HEAD"
+            elif t == tok.null:
+                break
+            elif state == "EXPECT_HEAD":
+                curr_head = t
+                if curr_head not in entity_dict:
+                    entity_dict[curr_head] = {"text": curr_head, "type": None, "relations": []}
+                    entities.append(entity_dict[curr_head])
+                state = "EXPECT_HTYPE" if has_types else "EXPECT_REL"
+            elif state == "EXPECT_HTYPE":
+                if curr_head in entity_dict:
+                    entity_dict[curr_head]["type"] = t
+                state = "EXPECT_REL"
+            elif state == "EXPECT_REL":
+                if t == "and":
+                    continue
+                curr_rel = t
+                state = "EXPECT_TAIL"
+            elif state == "EXPECT_TAIL":
+                curr_tail = t
+                if not has_types:
+                    if curr_head in entity_dict:
+                        entity_dict[curr_head]["relations"].append({"type": curr_rel, "tail": curr_tail, "tail_type": None})
+                    state = "EXPECT_AND"
+                else:
+                    state = "EXPECT_TTYPE"
+            elif state == "EXPECT_TTYPE":
+                if curr_head in entity_dict:
+                    entity_dict[curr_head]["relations"].append({"type": curr_rel, "tail": curr_tail, "tail_type": t})
+                state = "EXPECT_AND"
+            elif state == "EXPECT_AND":
+                if t == "and":
+                    state = "EXPECT_REL"
+                else:
+                    curr_rel = t
+                    state = "EXPECT_TAIL"
+                    
+        return _deduplicate_entities(entities), rejected
+
     state = _State.IDLE
     curr_ent = None
     curr_lbl_parts: List[str] = []
@@ -360,7 +440,13 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
     return _deduplicate_entities(entities), rejected
 
 
-def extract_triplets(entities: List[EntityBlock]) -> List[Triplet]:
+def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Triplet]:
+    if include_types:
+        return [(
+            f"{ent['text']} [{ent.get('type') or '?'}]", 
+            rel["type"], 
+            f"{rel['tail']} [{rel.get('tail_type') or '?'}]"
+        ) for ent in entities for rel in ent["relations"]]
     return [(ent["text"], rel["type"], rel["tail"]) for ent in entities for rel in ent["relations"]]
 
 

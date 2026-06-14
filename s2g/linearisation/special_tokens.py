@@ -25,12 +25,14 @@ class S2GTokens:
         self.head = "<head>"
         self.nest = "<nest>"
         self.text = "<text>"
+        self.trip = "<trip>"
+        self.sep = "<sep>"
 
         active_map = {
             "boundary": {"bound", "ent_start", "ent_end"},
             "ner": {"ner", "text", "ent_start", "ent_end", "type_"},
-            "re": {"re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
-            "boundary_re": {"re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
+            "re": {"re", "text", "trip", "sep"},
+            "boundary_re": {"re", "text", "trip", "sep"},
             "pipeline": {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
             "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
             "boundary_joint": {"re", "text", "head", "rel", "tail", "nest", "ent_start"},
@@ -51,11 +53,11 @@ class S2GTokens:
 
     @property
     def all_tokens(self) -> List[str]:
-        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text", "trip", "sep"]
         return [getattr(self, attr) for attr in all_attrs if attr in self._active]
 
     def as_dict(self) -> Dict[str, str]:
-        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+        all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text", "trip", "sep"]
         return {attr: getattr(self, attr) for attr in all_attrs}
 
 
@@ -92,7 +94,7 @@ def get_token_ids(
 ) -> Dict[str, int]:
     res = {}
     unk_id = tokenizer.unk_token_id
-    all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text"]
+    all_attrs = ["bound", "ner", "re", "type_", "rel", "ent_start", "ent_end", "tail", "null", "head", "nest", "text", "trip", "sep"]
     for idx, name in enumerate(all_attrs):
         token_str = getattr(tokens, name)
         token_id = tokenizer.convert_tokens_to_ids(token_str)

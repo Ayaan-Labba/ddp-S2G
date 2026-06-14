@@ -12,7 +12,8 @@ from s2g.linearisation import (
     S2GTokens, AnyTokens, VARIANT_TO_TASKS,
     build_boundary_encoder_input, build_boundary_joint_encoder_input,
     build_joint_encoder_input, build_ner_encoder_input,
-    build_re_encoder_input, build_sel, organize_by_entity,
+    build_re_encoder_input, build_boundary_re_encoder_input, 
+    build_pipeline_re_encoder_input, build_sel, organize_by_entity,
     filter_entity_blocks
 )
 
@@ -91,28 +92,49 @@ class S2GCollator:
         return enc, build_sel(filtered_blocks, "ner", self._tok, rejected_ent_types=neg_ent, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
     def _prepare_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
-        pos_rel, neg_rel = self._sample_types(
-            inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
-        )
-        data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in inst["entities"]]
-        enc = build_re_encoder_input(
-            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
-        )
-        filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-        
-        return enc, build_sel(filtered_blocks, "re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        if self._variant == "pipeline":
+            pos_rel, neg_rel = self._sample_types(
+                inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
+            )
+            data = [(int(e["offset"][0]), int(e["offset"][1]), e["type"]) for e in inst["entities"]]
+            enc = build_pipeline_re_encoder_input(
+                pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
+            )
+            filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+            return enc, build_sel(filtered_blocks, "pipeline_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        else:
+            pos_ent, neg_ent = self._sample_types(
+                inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
+            )
+            pos_rel, neg_rel = self._sample_types(
+                inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
+            )
+            enc = build_re_encoder_input(
+                pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
+            )
+            filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+            return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
     def _prepare_boundary_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
-        pos_rel, neg_rel = self._sample_types(
-            inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
-        )
-        data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
-        enc = build_re_encoder_input(
-            pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
-        )
-        filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-        
-        return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        if self._variant == "boundary_pipeline":
+            pos_rel, neg_rel = self._sample_types(
+                inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
+            )
+            data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
+            enc = build_pipeline_re_encoder_input(
+                pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
+            )
+            filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+            return enc, build_sel(filtered_blocks, "pipeline_boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        else:
+            pos_rel, neg_rel = self._sample_types(
+                inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
+            )
+            enc = build_boundary_re_encoder_input(
+                pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
+            )
+            filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+            return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
 
     def _prepare_boundary_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(

@@ -125,6 +125,24 @@ def build_ner_encoder_input(
 
 
 def build_re_encoder_input(
+    entity_types: List[str], rel_types: List[str], text: str, 
+    random_order: bool = False, tok: AnyTokens = S2GTokens("re"), ssi_prompt: str = "ssi"
+) -> str:
+    if ssi_prompt == "natural":
+        r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
+        e_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
+        prefix = f"List relations of types [{', '.join(r_types)}] among entities of types [{', '.join(e_types)}]:"
+        return f"{prefix}  {text}"
+    elif ssi_prompt == "false":
+        return text
+    else:
+        ent_ssi = build_ner_ssi(entity_types, random_order, tok)
+        rel_ssi = build_rel_ssi(rel_types, random_order, tok)
+        prefix = " ".join(filter(None, [ent_ssi, rel_ssi]))
+        return f"{prefix} {tok.text} {text}"
+
+
+def build_pipeline_re_encoder_input(
     rel_types: List[str], source_tokens: List[str], entity_data: List[Tuple[int, int, str]], 
     random_order: bool = False, tok: AnyTokens = S2GTokens("re"), ssi_prompt: str = "ssi"
 ) -> str:
@@ -132,6 +150,21 @@ def build_re_encoder_input(
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         prefix = f"List relations of types [{', '.join(types)}] among the entities in the given text:"
+        return f"{prefix}  {text}"
+    elif ssi_prompt == "false":
+        return text
+    else:
+        ssi = build_rel_ssi(rel_types, random_order, tok)
+        return f"{ssi} {tok.text} {text}"
+
+
+def build_boundary_re_encoder_input(
+    rel_types: List[str], text: str, 
+    random_order: bool = False, tok: AnyTokens = S2GTokens("boundary_re"), ssi_prompt: str = "ssi"
+) -> str:
+    if ssi_prompt == "natural":
+        types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
+        prefix = f"List relations of types [{', '.join(types)}] among entities:"
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
