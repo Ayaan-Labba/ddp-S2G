@@ -103,7 +103,7 @@ def build_boundary_encoder_input(text: str, tok: AnyTokens = S2GTokens("boundary
     if ssi_prompt == "false":
         return text
     elif ssi_prompt == "natural":
-        return f"List entities in the given text:  {text}"
+        return f"List all entities in the given text:  {text}"
     else:
         return f"{tok.bound} {text}"
 
@@ -115,7 +115,7 @@ def build_ner_encoder_input(
     text = augment_ner_text(source_tokens, entity_spans, tok)
     if ssi_prompt == "natural":
         types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-        prefix = f"List entities of types [{', '.join(types)}] in the given text: "
+        prefix = f"List all entities of types [{', '.join(types)}] in the given text: "
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
@@ -131,7 +131,7 @@ def build_re_encoder_input(
     if ssi_prompt == "natural":
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         e_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-        prefix = f"List relations [{', '.join(r_types)}] among entities of type [{', '.join(e_types)}]: "
+        prefix = f"List all relations of types [{', '.join(r_types)}] among the entities of types [{', '.join(e_types)}] in the given text: "
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
@@ -149,7 +149,7 @@ def build_pipeline_re_encoder_input(
     text = augment_re_text(source_tokens, entity_data, tok)
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List relations [{', '.join(types)}] among the entities in the given text: "
+        prefix = f"List all relations of types [{', '.join(types)}] among the entities in the given text: "
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
@@ -164,7 +164,7 @@ def build_boundary_re_encoder_input(
 ) -> str:
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List relations [{', '.join(types)}] among the entities in the given text: "
+        prefix = f"List all relations of types [{', '.join(types)}] among the entities in the given text: "
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
@@ -176,7 +176,7 @@ def build_boundary_re_encoder_input(
 def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_order: bool = False, tok: AnyTokens = S2GTokens("boundary_joint"), ssi_prompt: str = "ssi") -> str:
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List entities and the relations [{', '.join(types)}] in the given text: "
+        prefix = f"List all entities and all relations of types [{', '.join(types)}] in the given text: "
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text
@@ -190,7 +190,7 @@ def build_joint_encoder_input(
     if ssi_prompt == "natural":
         ent_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List the entities of types [{', '.join(ent_types)}] and the relations [{', '.join(r_types)}] among them in the given text:"
+        prefix = f"List all entities of types [{', '.join(ent_types)}] and all relations of types [{', '.join(r_types)}] among them in the given text:"
         return f"{prefix}  {text}"
     elif ssi_prompt == "false":
         return text

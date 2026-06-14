@@ -5,27 +5,27 @@
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null       
-  model_variant: joint           
+  model_variant: re           
 
 tokenization:
-  max_source_length: 220
-  max_target_length: 180            # Max values from `measure_lengths.py`
+  max_source_length: 230
+  max_target_length: 230            # Max values from `measure_lengths.py`
 
 optimizer:
   optim: adamw_torch
-  lr: 3.0e-5                        # SOTA fine-tuning rate from Wadhwa et al.
-  weight_decay: 0.01
+  lr: 5.0e-5                        # SOTA fine-tuning rate from Wadhwa et al.
+  weight_decay: 0.00
   adam_beta1: 0.9
   adam_beta2: 0.999
   adam_epsilon: 1.0e-8
 
 scheduler:
-  type: cosine
-  warmup_steps: 2784                    # ~12% linear warmup across 10 epochs
+  type: constant_with_warmup
+  warmup_steps: 1392                    # ~12% linear warmup across 200 epochs
 
 train:
-  max_steps: 23200                     # ~200 epochs over 922 sentences with effective batch size 8
-  batch_size: 8                     
+  max_steps: 11600                     # ~200 epochs over 922 sentences with effective batch size 32
+  batch_size: 16                     
   gradient_acc_steps: 1              
   gradient_clip_value: 1.0
   gradient_checkpointing: False      
@@ -33,12 +33,12 @@ train:
   seed: 0
 
 validation:
-  check_interval: 116               # Validate once per epoch
+  check_interval: 58               # Validate once per epoch
   percent_check: 1.0
   train_eval_percent_check: 0.25
   batch_size: 256
   early_stopping_patience: 20
-  early_stopping_metric: boundary_f1
+  early_stopping_metric: strict_f1
 
 generation:
   num_beams: 1                     
@@ -54,6 +54,8 @@ ssi:
   random_prompt: false
   random_sel: false
   use_rejection: false
+  ssi_prompt: natural
+  use_nesting: false
 
 checkpoint:
   save_top_k: 3
@@ -61,18 +63,18 @@ checkpoint:
   resume_from: null
 
 callbacks:
-  sample_generation_interval: 1160
+  sample_generation_interval: 580
 
 wandb:
   project: s2g
   entity: null
-  run_name: joint-base-conll04
+  run_name: re-base-conll04-natural
 
 data:
   data_dir: data/conll04
   schema_file: data/conll04/relation.schema
   entity_schema_file: data/conll04/entity.schema
-  output_dir: outputs/finetune/joint-base-conll04
+  output_dir: outputs/finetune/re-base-conll04-natural
 
 hardware:
   num_workers: 4

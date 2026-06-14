@@ -6,6 +6,6 @@ entities:
 relations:
   Kill: killed
   Live_In: lives in
-  Located_In: located in
-  OrgBased_In: organization based in
+  Located_In: is located in
+  OrgBased_In: is based in
   Work_For: works for
