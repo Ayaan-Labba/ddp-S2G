@@ -148,13 +148,13 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_parts.extend([tok.trip, ent['text']])
                     if task == "re":
-                        ent_parts.extend([tok.sep, ent.get('type') or ''])
+                        ent_parts.extend([tok.type_, ent.get('type') or ''])
                 else:
                     ent_parts.extend([tok.sep, "and"])
                     
                 ent_parts.extend([tok.sep, rel['type'], tok.sep, rel['tail']])
                 if task == "re":
-                    ent_parts.extend([tok.sep, rel.get('tail_type') or ''])
+                    ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
             parts.append(" ".join(ent_parts))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
@@ -309,7 +309,7 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         rejected: List[RejectedItem] = []
         
         has_types = tok.variant in {"re", "pipeline"}
-        data_tokens = [t for t in tokens if t != tok.sep]
+        data_tokens = [t for t in tokens if t not in {tok.sep, tok.type_}]
         
         state = "IDLE"
         curr_head = None

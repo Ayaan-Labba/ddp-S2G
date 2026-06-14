@@ -264,7 +264,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             self._tasks.append(task)
             
             self._ent_type_tries.append(
-                Trie(e_seqs, {self.rel_id} if task in {"joint", "re", "pipeline_re"} else self._get_inter_tokens(task))
+                Trie(e_seqs, {self.rel_id} if task in {"joint", "pipeline_re"} else ({self.sep_id} if task == "re" else self._get_inter_tokens(task)))
                 if task in {"ner", "joint", "re", "pipeline_re"} else None
             )
             self._tail_type_tries.append(
@@ -329,15 +329,20 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 state.fsm_state = FSMState.TRIP_NULL
             elif state.fsm_state == FSMState.TRIP_NULL:
                 pass # Accept anything after null until EOS
+            elif token_id == self.type_id and task == "re":
+                if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
+                    state.fsm_state, state.label_prefix = FSMState.TRIP_HTYPE, []
+                elif state.fsm_state == FSMState.TRIP_TAIL_SPAN:
+                    state.fsm_state, state.label_prefix = FSMState.TRIP_TTYPE, []
             elif token_id == self.sep_id:
                 if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_HTYPE if task == "re" else FSMState.TRIP_REL, []
+                    state.fsm_state, state.label_prefix = FSMState.TRIP_REL, []
                 elif state.fsm_state == FSMState.TRIP_HTYPE:
                     state.fsm_state, state.label_prefix = FSMState.TRIP_REL, []
                 elif state.fsm_state == FSMState.TRIP_REL:
                     state.fsm_state, state.span_tokens = FSMState.TRIP_TAIL_SPAN, []
                 elif state.fsm_state == FSMState.TRIP_TAIL_SPAN:
-                    state.fsm_state, state.label_prefix = FSMState.TRIP_TTYPE if task == "re" else FSMState.TRIP_AND_EXPECTED, []
+                    state.fsm_state, state.label_prefix = FSMState.TRIP_AND_EXPECTED, []
                 elif state.fsm_state == FSMState.TRIP_TTYPE:
                     state.fsm_state = FSMState.TRIP_AND_EXPECTED
                 elif state.fsm_state == FSMState.TRIP_AND_EXPECTED:
@@ -417,7 +422,8 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return frozenset({self.trip_id, self.eos_id} | {self.null_id})
                 
             if state.fsm_state == FSMState.TRIP_HEAD_SPAN:
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.sep_id}) or frozenset({self.eos_id})
+                exits = {self.type_id} if task == "re" else {self.sep_id}
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.TRIP_HTYPE:
                 return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset({self.sep_id})
@@ -426,7 +432,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.sep_id})
                 
             if state.fsm_state == FSMState.TRIP_TAIL_SPAN:
-                exits = {self.sep_id} if task == "re" else {self.sep_id, self.trip_id, self.null_id, self.eos_id}
+                exits = {self.type_id} if task == "re" else {self.sep_id, self.trip_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.TRIP_TTYPE:

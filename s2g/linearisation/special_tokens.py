@@ -32,7 +32,7 @@ class S2GTokens:
         active_map = {
             "boundary": {"bound", "ent_start", "ent_end"},
             "ner": {"ner", "text", "ent_start", "ent_end", "type_"},
-            "re": {"re", "text", "trip", "sep"},
+            "re": {"re", "text", "trip", "sep", "type_"},
             "boundary_re": {"re", "text", "trip", "sep"},
             "pipeline": {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
             "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},

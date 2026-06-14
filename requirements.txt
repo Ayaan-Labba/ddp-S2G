@@ -16,6 +16,8 @@ datasets>=3.1.0               # 3.1+ required; removes custom-script loading
 
 # ---- Tokenisation -----------------------------------------------------------
 nltk>=3.8                     # Word tokenisation for entity span alignment
+sentencepiece>=0.1.99         # Required for T5/SentencePiece tokenizers
+protobuf>=3.20.3              # Required by sentencepiece
 
 # ---- Configuration ----------------------------------------------------------
 pyyaml>=6.0
