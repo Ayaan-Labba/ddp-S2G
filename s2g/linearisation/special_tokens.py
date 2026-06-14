@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
+import torch
 
 
 class S2GTokens:
@@ -85,6 +86,36 @@ def add_special_tokens_to_tokenizer(
     )
     if model is not None and num_added > 0:
         model.resize_token_embeddings(len(tokenizer))
+        
+        # Warm start special tokens with embeddings of related natural text
+        token_map = {
+            tokens.trip: ".",
+            tokens.sep: ",",
+            tokens.head: "head",
+            tokens.tail: "tail",
+            tokens.rel: "relation",
+            tokens.type_: "type",
+            tokens.ner: "entity",
+            tokens.re: "relation",
+            tokens.bound: "boundary",
+            tokens.text: "text",
+            tokens.nest: "and",
+            tokens.ent_start: "entity",
+            tokens.ent_end: "entity",
+            tokens.null: "none"
+        }
+        
+        with torch.no_grad():
+            embeddings = model.get_input_embeddings().weight
+            for special_tok, init_text in token_map.items():
+                if special_tok not in tokens._active:
+                    continue
+                new_id = tokenizer.convert_tokens_to_ids(special_tok)
+                init_ids = tokenizer.encode(init_text, add_special_tokens=False)
+                if init_ids and new_id != tokenizer.unk_token_id:
+                    init_embs = embeddings[init_ids].mean(dim=0)
+                    embeddings[new_id].copy_(init_embs)
+
     return num_added
 
 

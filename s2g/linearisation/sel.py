@@ -65,7 +65,8 @@ def build_sel(
         rejected_ent_types: Optional[List[str]] = None, 
         rejected_rel_types: Optional[List[str]] = None, 
         random_sel: bool = False,
-        use_rejection: bool = False
+        use_rejection: bool = False,
+        use_nesting: bool = True
     ) -> str:
     if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint"}:
         raise ValueError(f"Unknown task {task!r}.")
@@ -92,9 +93,10 @@ def build_sel(
             if not rels:
                 continue
 
-            ent_triplet = [tok.head, ent['text']]
+            ent_triplet = []
             for i, rel in enumerate(rels):
-                if i == 0:
+                if i == 0 or not use_nesting:
+                    ent_triplet.extend([tok.head, ent['text']])
                     ent_triplet.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
                     ent_triplet.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
@@ -126,11 +128,12 @@ def build_sel(
             continue
 
         if task in {"pipeline_re", "pipeline_boundary_re"}:
-            ent_parts = [tok.head, ent['text']]
-            if task == "pipeline_re":
-                ent_parts.extend([tok.type_, ent.get('type') or ''])
+            ent_parts = []
             for i, rel in enumerate(rels):
-                if i == 0:
+                if i == 0 or not use_nesting:
+                    ent_parts.extend([tok.head, ent['text']])
+                    if task == "pipeline_re":
+                        ent_parts.extend([tok.type_, ent.get('type') or ''])
                     ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
                     if task == "pipeline_re":
                         ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
@@ -140,12 +143,15 @@ def build_sel(
                         ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
             parts.append(" ".join(ent_parts))
         elif task in {"re", "boundary_re"}:
-            ent_parts = [tok.trip, ent['text']]
-            if task == "re":
-                ent_parts.extend([tok.sep, ent.get('type') or ''])
+            ent_parts = []
             for i, rel in enumerate(rels):
-                if i > 0:
+                if i == 0 or not use_nesting:
+                    ent_parts.extend([tok.trip, ent['text']])
+                    if task == "re":
+                        ent_parts.extend([tok.sep, ent.get('type') or ''])
+                else:
                     ent_parts.extend([tok.sep, "and"])
+                    
                 ent_parts.extend([tok.sep, rel['type'], tok.sep, rel['tail']])
                 if task == "re":
                     ent_parts.extend([tok.sep, rel.get('tail_type') or ''])

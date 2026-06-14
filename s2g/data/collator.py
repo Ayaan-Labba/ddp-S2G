@@ -37,6 +37,7 @@ class S2GCollator:
         self._random_prompt = config.get("random_prompt", False)
         self._random_sel = config.get("random_sel", False)
         self._use_rejection = config.get("use_rejection", False)
+        self._use_nesting = config.get("use_nesting", True)
         self._ssi_prompt = config.get("ssi_prompt", "ssi")
         self._tok: AnyTokens = S2GTokens(self._variant, use_rejection=self._use_rejection)
         self._step = 0
@@ -76,7 +77,7 @@ class S2GCollator:
     def _prepare_boundary(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         return (
             build_boundary_encoder_input(inst["text"], tok=self._tok, ssi_prompt=self._ssi_prompt), 
-            build_sel(blocks, "boundary", self._tok, random_sel=self._random_sel)
+            build_sel(blocks, "boundary", self._tok, random_sel=self._random_sel, use_nesting=self._use_nesting)
         )
 
     def _prepare_ner(self, inst: Dict, blocks: List) -> Tuple[str, str]:
@@ -89,7 +90,7 @@ class S2GCollator:
         allowed_ents = set(pos_ent)
         filtered_blocks = [b for b in blocks if b.get("type") in allowed_ents]
         
-        return enc, build_sel(filtered_blocks, "ner", self._tok, rejected_ent_types=neg_ent, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        return enc, build_sel(filtered_blocks, "ner", self._tok, rejected_ent_types=neg_ent, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
 
     def _prepare_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         if self._variant == "pipeline":
@@ -101,7 +102,7 @@ class S2GCollator:
                 pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "pipeline_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+            return enc, build_sel(filtered_blocks, "pipeline_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
         else:
             pos_ent, neg_ent = self._sample_types(
                 inst["entity_types"], self._entity_schema, self._cfg.get("max_ent_types_in_prompt")
@@ -113,7 +114,7 @@ class S2GCollator:
                 pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+            return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
 
     def _prepare_boundary_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         if self._variant == "boundary_pipeline":
@@ -125,7 +126,7 @@ class S2GCollator:
                 pos_rel + neg_rel, inst["tokens"], data, random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "pipeline_boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+            return enc, build_sel(filtered_blocks, "pipeline_boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
         else:
             pos_rel, neg_rel = self._sample_types(
                 inst["rel_types"], self._rel_schema, self._cfg.get("max_rel_types_in_prompt")
@@ -134,7 +135,7 @@ class S2GCollator:
                 pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+            return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
 
     def _prepare_boundary_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(
@@ -145,7 +146,7 @@ class S2GCollator:
         )
         filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
         
-        return enc, build_sel(filtered_blocks, "boundary_joint", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection)
+        return enc, build_sel(filtered_blocks, "boundary_joint", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
 
     def _prepare_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_ent, neg_ent = self._sample_types(
@@ -165,7 +166,8 @@ class S2GCollator:
         
         return enc, build_sel(
             filtered_blocks, "joint", self._tok, rejected_ent_types=neg_ent, 
-            rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection
+            rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection,
+            use_nesting=self._use_nesting
         )
 
     def _sample_types(

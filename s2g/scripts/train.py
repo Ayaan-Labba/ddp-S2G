@@ -69,6 +69,7 @@ def main() -> None:
         "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
         "tasks": tasks, "mode": cfg.ssi.mode, "max_steps": cfg.train.max_steps,
         "use_rejection": cfg.ssi.use_rejection,
+        "use_nesting": getattr(cfg.ssi, "use_nesting", True),
         "ssi_prompt": cfg.ssi.ssi_prompt,
     })
 
