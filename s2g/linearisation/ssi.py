@@ -115,7 +115,7 @@ def build_ner_encoder_input(
     text = augment_ner_text(source_tokens, entity_spans, tok)
     if ssi_prompt == "natural":
         types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-        prefix = f"List all entities of types [{', '.join(types)}] in the given text: "
+        prefix = f"Identify all entities of types [{', '.join(types)}]: "
         return f"{prefix}  {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
@@ -194,7 +194,7 @@ def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_o
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         r_types_str = ", ".join(f"'{r}'" for r in types)
-        return f"Identify all the entities and find relations of types [{r_types_str}] among them in the given text: \"{text}\""
+        return f"Identify entities and find relations [{r_types_str}]: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -209,7 +209,7 @@ def build_joint_encoder_input(
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         ent_types_str = ", ".join(f"'{e}'" for e in ent_types)
         r_types_str = ", ".join(f"'{r}'" for r in r_types)
-        return f"Identify all entities of types [{ent_types_str}] and find relations of types [{r_types_str}] among them in the given text: \"{text}\""
+        return f"Identify entities [{ent_types_str}] and relations [{r_types_str}]: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
