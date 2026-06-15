@@ -84,12 +84,12 @@ def build_sel(
                 if task == "re":
                     head_type = ent.get("type") or ""
                     tail_type = rel.get("tail_type") or ""
-                    triplets.append(f"[[{ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type}]]")
+                    triplets.append(f"( {ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type})")
                 else:
-                    triplets.append(f"[[{ent['text']}, {rel['type']}, {rel['tail']}]]")
+                    triplets.append(f"( {ent['text']}, {rel['type']}, {rel['tail']})")
         if not triplets:
             return ""
-        parts = ["Relations: " + ", ".join(triplets)]
+        parts = ["Relations: [" + ", ".join(triplets) + "]"]
         if use_rejection and rejected_rel_types:
             r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
             if len(r_types) > 1:
@@ -312,7 +312,7 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         
         has_types = tok.variant == "re"
         
-        triplets = re.findall(r"\[\[(.*?)\]\]", text)
+        triplets = re.findall(r"\((.*?)\)", text)
         for trip in triplets:
             parts = [p.strip() for p in trip.split(",")]
             if len(parts) != 3:

@@ -218,15 +218,13 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             full_ids = tokenizer.encode("a" + suffix, add_special_tokens=False)
             return full_ids[len(a_ids):]
 
-        self.re_prefix_seq = tokenizer.encode("Relations:", add_special_tokens=False)
-        self.re_triplet_start_seq = tokenizer.encode(" [[", add_special_tokens=False)
-        if not self.re_triplet_start_seq:
-            self.re_triplet_start_seq = tokenizer.encode("[[", add_special_tokens=False)
-            
+        self.re_prefix_seq = tokenizer.encode("Relations: [", add_special_tokens=False)
+        self.re_triplet_start_seq = get_suffix_ids("(")
+        
         self.re_type_sep_seq = get_suffix_ids(":")
         self.re_element_sep_seq = get_suffix_ids(", ")
-        self.re_triplet_end_seq = get_suffix_ids("]]")
-        self.re_next_triplet_start_seq = get_suffix_ids("]], [[")
+        self.re_triplet_end_seq = get_suffix_ids(")]")
+        self.re_next_triplet_start_seq = get_suffix_ids("), (")
 
         self._special_ids = frozenset(v for v in tid.values() if v is not None) | {self.eos_id, self.pad_id}
 
@@ -337,7 +335,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             # Setup sentinels for tries based on format
             if task == "re":
                 ent_type_sentinel = {self.re_element_sep_seq[0]}
-                tail_type_sentinel = {self.re_triplet_end_seq[0]}
+                tail_type_sentinel = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
             else:
                 ent_type_sentinel = {self.rel_id} if task in {"joint", "pipeline_re"} else ({self.sep_id} if task == "re" else self._get_inter_tokens(task))
                 tail_type_sentinel = {self.sep_id, self.trip_id, self.null_id, self.eos_id} if task == "re" else {self.nest_id, self.head_id, self.null_id, self.eos_id}
@@ -507,17 +505,23 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                         state.span_tokens.clear()
 
             elif state.re_state == REState.TAIL_SPAN:
-                sep_seq = self.re_type_sep_seq if task == "re" else self.re_triplet_end_seq
-                if token_id == sep_seq[0]:
-                    state.re_match_buffer = [token_id]
-                    if len(state.re_match_buffer) == len(sep_seq):
-                        state.re_state = REState.TAIL_TYPE_LABEL if task == "re" else REState.EXPECT_EOS
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
+                if task == "re":
+                    if token_id == self.re_type_sep_seq[0]:
+                        state.re_match_buffer = [token_id]
+                        if len(state.re_match_buffer) == len(self.re_type_sep_seq):
+                            state.re_state = REState.TAIL_TYPE_LABEL
+                            state.re_match_buffer.clear()
+                            state.label_prefix.clear()
+                        else:
+                            state.re_state = REState.EXPECT_TYPE_SEP_2
                     else:
-                        state.re_state = REState.EXPECT_TYPE_SEP_2 if task == "re" else REState.EXPECT_TRIPLET_END_OR_NEXT
+                        state.span_tokens.append(token_id)
                 else:
-                    state.span_tokens.append(token_id)
+                    if token_id in {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}:
+                        state.re_match_buffer = [token_id]
+                        state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
+                    else:
+                        state.span_tokens.append(token_id)
 
             elif state.re_state == REState.EXPECT_TYPE_SEP_2:
                 if token_id == self.re_type_sep_seq[len(state.re_match_buffer)]:
@@ -528,13 +532,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                         state.label_prefix.clear()
 
             elif state.re_state == REState.TAIL_TYPE_LABEL:
-                if token_id == self.re_triplet_end_seq[0]:
+                if token_id in {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}:
                     state.re_match_buffer = [token_id]
-                    if len(state.re_match_buffer) == len(self.re_triplet_end_seq):
-                        state.re_state = REState.EXPECT_EOS
-                        state.re_match_buffer.clear()
-                    else:
-                        state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
+                    state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
                 else:
                     state.label_prefix.append(token_id)
 
@@ -643,14 +643,14 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return frozenset({self.re_element_sep_seq[len(state.re_match_buffer)]})
                 
             if state.re_state == REState.TAIL_SPAN:
-                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_triplet_end_seq[0]}
+                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.re_state == REState.EXPECT_TYPE_SEP_2:
                 return frozenset({self.re_type_sep_seq[len(state.re_match_buffer)]})
                 
             if state.re_state == REState.TAIL_TYPE_LABEL:
-                sentinels = {self.re_triplet_end_seq[0]}
+                sentinels = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
             if state.re_state == REState.EXPECT_TRIPLET_END_OR_NEXT:
