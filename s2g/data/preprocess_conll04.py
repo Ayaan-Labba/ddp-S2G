@@ -7,14 +7,14 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Tuple, Set
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
 
-def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dict[str, str]]:
+def load_label_maps(config_map_path: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     if not config_map_path:
         return {}, {}
     path = Path(config_map_path)
@@ -33,11 +33,8 @@ def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dic
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 
-def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Optional[Dict]:
-    # Skip only if there are no tokens — REBEL keeps entity-less / relation-less instances.
-    tokens = raw.get("tokens")
-    if not tokens:
-        return None
+def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Dict:
+    tokens = raw["tokens"]
 
     entities = [{
         "text": " ".join(tokens[int(e["start"]):int(e["end"])]),
@@ -58,30 +55,22 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
 
 
 def process_split(
-    split_name: str, instances: List[Dict], output_path: Path,
+    split_name: str, input_path: Path, output_path: Path,
     entity_map: Dict[str, str], relation_map: Dict[str, str]
 ) -> Tuple[List[str], List[str]]:
     seen_ent: Set[str] = set()
     seen_rel: Set[str] = set()
-    skipped, written = 0, 0
+    written = 0
 
-    with open(output_path, "w", encoding="utf-8") as fout:
-        for raw in instances:
-            if inst := convert_instance(raw, entity_map, relation_map):
-                fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
-                seen_ent.update(inst["entity_types"])
-                seen_rel.update(inst["rel_types"])
-                written += 1
-            else:
-                skipped += 1
+    with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
+        for raw in json.load(fin):
+            inst = convert_instance(raw, entity_map, relation_map)
+            fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
+            seen_ent.update(inst["entity_types"])
+            seen_rel.update(inst["rel_types"])
+            written += 1
 
-    logger.info(
-        "Split: %s → %s (%d written, %d skipped)",
-        split_name,
-        output_path.name,
-        written,
-        skipped
-    )
+    logger.info("Split: %s → %s (%d written)", split_name, output_path.name, written)
     return list(seen_ent), list(seen_rel)
 
 
@@ -95,29 +84,28 @@ def _write_schema(path: Path, types: List[str]) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     parser = argparse.ArgumentParser(description="Preprocess dataset for S2G fine-tuning.")
-    parser.add_argument("--input_file", required=True, help="Path to conll04.json")
+    parser.add_argument("--input_dir", required=True, help="Directory containing conll04_train.json, conll04_dev.json, conll04_test.json")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--config_map", default="configs/data/conll04.yaml", help="Path to the config YAML for label mapping.")
     args = parser.parse_args()
 
-    input_file = Path(args.input_file)
+    input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     entity_map, relation_map = load_label_maps(args.config_map)
 
-    with open(input_file, encoding="utf-8") as fin:
-        dataset = json.load(fin)
+    split_mapping = [
+        ("train", input_dir / "conll04_train.json", "train.jsonl"),
+        ("dev",   input_dir / "conll04_dev.json",   "val.jsonl"),
+        ("test",  input_dir / "conll04_test.json",  "test.jsonl"),
+    ]
 
     all_ent, all_rel = [], []
-
-    split_mapping = {"train": "train.jsonl", "dev": "val.jsonl", "test": "test.jsonl"}
-
-    for split_key, out_name in split_mapping.items():
-        if split_key in dataset:
-            e, r = process_split(split_key, dataset[split_key], output_dir / out_name, entity_map, relation_map)
-            if split_key == "train":
-                all_ent, all_rel = e, r  # Prefer training schema
+    for split_name, input_path, out_name in split_mapping:
+        e, r = process_split(split_name, input_path, output_dir / out_name, entity_map, relation_map)
+        if split_name == "train":
+            all_ent, all_rel = e, r  # Prefer training schema
 
     _write_schema(output_dir / "entity.schema", all_ent)
     _write_schema(output_dir / "relation.schema", all_rel)

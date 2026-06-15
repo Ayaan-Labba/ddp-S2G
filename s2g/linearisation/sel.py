@@ -69,7 +69,7 @@ def build_sel(
         use_nesting: bool = True,
         rel_map: Optional[Dict[str, str]] = None
     ) -> str:
-    if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint"}:
+    if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
         raise ValueError(f"Unknown task {task!r}.")
     blocks = list(entity_blocks) if random_sel else entity_blocks
     if random_sel: 

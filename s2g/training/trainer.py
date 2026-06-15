@@ -33,7 +33,9 @@ from s2g.linearisation import (
     S2GTokens, AnyTokens, EntityBlock, VARIANT_TO_TASKS,
     build_boundary_encoder_input, build_boundary_joint_encoder_input,
     build_joint_encoder_input, build_ner_encoder_input,
-    build_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
+    build_re_encoder_input, build_boundary_re_encoder_input,
+    build_pipeline_re_encoder_input,
+    extract_triplets, find_all_token_spans, parse_sel,
 )
 
 logger = logging.getLogger(__name__)
@@ -524,17 +526,32 @@ class S2GTrainer(Seq2SeqTrainer):
                             for e in inst["entities"]
                         ]
                         ner_maps.append({e["text"]: "" for e in inst["entities"]})
-                    r_inputs.append(
-                        build_re_encoder_input(
-                            self._rel_schema, inst["tokens"], entity_data,
-                            False, self._tokens, ssi_prompt=self._ssi_prompt,
+                    if self._tokens.variant == "re":
+                        r_inputs.append(
+                            build_re_encoder_input(
+                                self._entity_schema, self._rel_schema, inst["text"],
+                                False, self._tokens, ssi_prompt=self._ssi_prompt,
+                            )
                         )
-                    )
+                    elif self._tokens.variant == "boundary_re":
+                        r_inputs.append(
+                            build_boundary_re_encoder_input(
+                                self._rel_schema, inst["text"],
+                                False, self._tokens, ssi_prompt=self._ssi_prompt,
+                            )
+                        )
+                    else:
+                        r_inputs.append(
+                            build_pipeline_re_encoder_input(
+                                self._rel_schema, inst["tokens"], entity_data,
+                                False, self._tokens, ssi_prompt=self._ssi_prompt,
+                            )
+                        )
             else:
                 for inst, b, n in zip(instances, b_per_inst, n_per_inst):
                     if use_ner:
                         r_inputs.append(
-                            build_re_encoder_input(
+                            build_pipeline_re_encoder_input(
                                 self._rel_schema, inst["tokens"],
                                 _to_entity_data(inst["tokens"], n, use_type=True),
                                 False, self._tokens, ssi_prompt=self._ssi_prompt,
@@ -543,7 +560,7 @@ class S2GTrainer(Seq2SeqTrainer):
                         ner_maps.append({e["text"]: e.get("type", "") for e in n})
                     else:
                         r_inputs.append(
-                            build_re_encoder_input(
+                            build_pipeline_re_encoder_input(
                                 self._rel_schema, inst["tokens"],
                                 _to_entity_data(inst["tokens"], b, use_type=False),
                                 False, self._tokens, ssi_prompt=self._ssi_prompt,

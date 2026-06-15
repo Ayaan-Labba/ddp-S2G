@@ -202,7 +202,8 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
         ) -> None:
         self.num_beams, self._batch_size = num_beams, source_ids.shape[0]
-        
+        self.tokenizer = tokenizer
+
         tid = get_token_ids(tokenizer, tokens)
         self.ent_start_id, self.ent_end_id = tid.get("ent_start"), tid.get("ent_end")
         self.type_id, self.rel_id, self.tail_id, self.null_id = tid.get("type_"), tid.get("rel"), tid.get("tail"), tid.get("null")

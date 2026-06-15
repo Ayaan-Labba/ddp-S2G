@@ -18,7 +18,8 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from s2g.linearisation import (
     S2GTokens, add_special_tokens_to_tokenizer,
     build_boundary_encoder_input, build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_ner_encoder_input, build_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
+    build_ner_encoder_input, build_re_encoder_input, build_boundary_re_encoder_input,
+    build_pipeline_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
     VARIANT_TO_TASKS,
 )
 from s2g.model import build_constraint_processor
@@ -95,7 +96,13 @@ def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[
             r_entities = list(dict.fromkeys((*s, "") for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
         else:
             r_entities = []
-        r_ents, _ = parse_sel(_generate_single(model, tokenizer, build_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
+        if tokens.variant == "re":
+            re_input = build_re_encoder_input(entity_schema, rel_schema, text, False, tokens, ssi_prompt=ssi_prompt)
+        elif tokens.variant == "boundary_re":
+            re_input = build_boundary_re_encoder_input(rel_schema, text, False, tokens, ssi_prompt=ssi_prompt)
+        else:
+            re_input = build_pipeline_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens, ssi_prompt=ssi_prompt)
+        r_ents, _ = parse_sel(_generate_single(model, tokenizer, re_input, tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
 
     res = {"text": text, "tokens": src_toks}
     if use_boundary:

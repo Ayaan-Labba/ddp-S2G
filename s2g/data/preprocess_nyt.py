@@ -1,9 +1,7 @@
 """
 Pre-processing script for the NYT-multi dataset (from the JointRE repo) into S2G fine-tuning format.
-
-REBEL behaviour (nyt_typed.py): every row is yielded regardless of whether
-it has relations — an empty spo_list produces an empty triplets string.
-We mirror that here: skip only if the record has no tokens at all.
+Preprocessing logic matches REBEL's nyt_typed.py: relations are sorted by head entity start position,
+and all rows are yielded unconditionally.
 """
 from __future__ import annotations
 
@@ -11,7 +9,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Tuple, Set
 
 import yaml
 
@@ -20,7 +18,7 @@ from s2g.linearisation import build_sel, organize_by_entity
 logger = logging.getLogger(__name__)
 
 
-def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dict[str, str]]:
+def load_label_maps(config_map_path: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     if not config_map_path:
         return {}, {}
     path = Path(config_map_path)
@@ -39,18 +37,14 @@ def load_label_maps(config_map_path: Optional[str]) -> Tuple[Dict[str, str], Dic
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 
-def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Optional[Dict]:
-    # Skip only if there are no tokens — REBEL keeps relation-less instances.
-    tokens = raw.get("tokens")
-    if not tokens:
-        return None
-
+def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[str, str]) -> Dict:
+    tokens = raw["tokens"]
     text = " ".join(tokens)
     entities_registry: Dict[Tuple[int, int], Dict] = {}
     relations = []
 
-    # zip safely produces nothing when either list is absent or empty
-    for relation, details in zip(raw.get("spo_list", []), raw.get("spo_details", [])):
+    relations_sorted = sorted(zip(raw.get("spo_list", []), raw.get("spo_details", [])), key=lambda tup: tup[1][0])
+    for relation, details in relations_sorted:
         # details layout: [head_start, head_end, head_type, rel_type, tail_start, tail_end, tail_type]
         h_start, h_end, h_type = int(details[0]), int(details[1]), details[2]
         t_start, t_end, t_type = int(details[4]), int(details[5]), details[6]
@@ -103,26 +97,17 @@ def process_split(
 ) -> Tuple[List[str], List[str]]:
     seen_ent: Set[str] = set()
     seen_rel: Set[str] = set()
-    skipped, written = 0, 0
+    written = 0
 
     with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
-        data = json.load(fin)
-        for raw in data:
-            if inst := convert_instance(raw, entity_map, relation_map):
-                fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
-                seen_ent.update(inst["entity_types"])
-                seen_rel.update(inst["rel_types"])
-                written += 1
-            else:
-                skipped += 1
+        for raw in json.load(fin):
+            inst = convert_instance(raw, entity_map, relation_map)
+            fout.write(json.dumps(inst, ensure_ascii=False) + "\n")
+            seen_ent.update(inst["entity_types"])
+            seen_rel.update(inst["rel_types"])
+            written += 1
 
-    logger.info(
-        "%s → %s (%d written, %d skipped)",
-        input_path.name,
-        output_path.name,
-        written,
-        skipped
-    )
+    logger.info("%s → %s (%d written)", input_path.name, output_path.name, written)
     return list(seen_ent), list(seen_rel)
 
 
@@ -148,17 +133,16 @@ def main() -> None:
 
     all_ent, all_rel = [], []
 
-    file_map = {
-        "train.json": "train.jsonl",
-        "dev.json": "val.jsonl",
-        "test.json": "test.jsonl"
-    }
+    split_mapping = [
+        ("train", input_dir / "train.json", "train.jsonl"),
+        ("dev",   input_dir / "dev.json",   "val.jsonl"),
+        ("test",  input_dir / "test.json",  "test.jsonl"),
+    ]
 
-    for in_name, out_name in file_map.items():
-        if (in_path := input_dir / in_name).exists():
-            e, r = process_split(in_path, output_dir / out_name, entity_map, relation_map)
-            if in_name == "train.json":
-                all_ent, all_rel = e, r
+    for split_name, input_path, out_name in split_mapping:
+        e, r = process_split(input_path, output_dir / out_name, entity_map, relation_map)
+        if split_name == "train":
+            all_ent, all_rel = e, r
 
     _write_schema(output_dir / "entity.schema", all_ent)
     _write_schema(output_dir / "relation.schema", all_rel)
