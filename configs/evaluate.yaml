@@ -37,6 +37,7 @@ train:
 
 ssi:
   ssi_prompt: natural
+  warm: true
 
 data:
   data_dir: data/conll04

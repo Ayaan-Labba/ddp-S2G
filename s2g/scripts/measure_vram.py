@@ -322,7 +322,7 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.ssi.warm)
     model.to(device)
 
     task_keys = _TRAIN_TASK_KEYS[cfg.model.model_variant]

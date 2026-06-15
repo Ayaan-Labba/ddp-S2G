@@ -87,6 +87,7 @@ def add_special_tokens_to_tokenizer(
     tokenizer: PreTrainedTokenizerBase,
     tokens: AnyTokens,
     model: Optional[PreTrainedModel] = None,
+    warm: bool = True,
 ) -> int:
     num_added = tokenizer.add_special_tokens(
         {"additional_special_tokens": tokens.all_tokens}
@@ -94,57 +95,58 @@ def add_special_tokens_to_tokenizer(
     if model is not None and num_added > 0:
         model.resize_token_embeddings(len(tokenizer))
 
-        # Warm-start new special-token embeddings with the mean embedding of a
-        # semantically related natural-language phrase.  This gives the model a
-        # better initialisation than a random vector and typically speeds up
-        # convergence.
-        #
-        # BUG FIX: the original code compared token *strings* (e.g. "<trip>")
-        # against tokens._active, which stores *attribute names* (e.g. "trip").
-        # These never matched, so every warm-start was silently skipped.
-        # Fix: build a reverse mapping {token_string → attr_name} and check the
-        # attr_name against tokens._active instead.
-        token_map = {
-            tokens.trip:      ".",
-            tokens.sep:       ":",
-            tokens.head:      "subject: ",
-            tokens.tail:      "object: ",
-            tokens.rel:       "relation: ",
-            tokens.type_:     "type: ",
-            tokens.ner:       "find type: ",
-            tokens.re:        "find relation: ",
-            tokens.bound:     "boundary",
-            tokens.text:      "in the text: ",
-            tokens.nest:      "the same subject",
-            tokens.ent_start: "entity: ",
-            tokens.ent_end:   "entity span end",
-            tokens.null:      "not found: ",
-            tokens.graph:     "relations: ",
-        }
+        if warm:
+            # Warm-start new special-token embeddings with the mean embedding of a
+            # semantically related natural-language phrase.  This gives the model a
+            # better initialisation than a random vector and typically speeds up
+            # convergence.
+            #
+            # BUG FIX: the original code compared token *strings* (e.g. "<trip>")
+            # against tokens._active, which stores *attribute names* (e.g. "trip").
+            # These never matched, so every warm-start was silently skipped.
+            # Fix: build a reverse mapping {token_string → attr_name} and check the
+            # attr_name against tokens._active instead.
+            token_map = {
+                tokens.trip:      ".",
+                tokens.sep:       ":",
+                tokens.head:      "subject: ",
+                tokens.tail:      "object: ",
+                tokens.rel:       "relation: ",
+                tokens.type_:     "type: ",
+                tokens.ner:       "find type: ",
+                tokens.re:        "find relation: ",
+                tokens.bound:     "boundary",
+                tokens.text:      "in the text: ",
+                tokens.nest:      "the same subject",
+                tokens.ent_start: "entity: ",
+                tokens.ent_end:   "entity span end",
+                tokens.null:      "not found: ",
+                tokens.graph:     "relations: ",
+            }
 
-        # Reverse map: token string → attribute name
-        _str_to_attr: Dict[str, str] = {
-            getattr(tokens, a): a for a in _ALL_ATTR_NAMES
-        }
+            # Reverse map: token string → attribute name
+            _str_to_attr: Dict[str, str] = {
+                getattr(tokens, a): a for a in _ALL_ATTR_NAMES
+            }
 
-        with torch.no_grad():
-            in_emb  = model.get_input_embeddings().weight
-            out_mod = model.get_output_embeddings()
-            out_emb = out_mod.weight if out_mod is not None else None
+            with torch.no_grad():
+                in_emb  = model.get_input_embeddings().weight
+                out_mod = model.get_output_embeddings()
+                out_emb = out_mod.weight if out_mod is not None else None
 
-            for special_tok, init_text in token_map.items():
-                # Resolve the token string back to its attribute name and check
-                # whether that attribute is active for this variant.
-                attr = _str_to_attr.get(special_tok)
-                if attr is None or attr not in tokens._active:
-                    continue
+                for special_tok, init_text in token_map.items():
+                    # Resolve the token string back to its attribute name and check
+                    # whether that attribute is active for this variant.
+                    attr = _str_to_attr.get(special_tok)
+                    if attr is None or attr not in tokens._active:
+                        continue
 
-                new_id   = tokenizer.convert_tokens_to_ids(special_tok)
-                init_ids = tokenizer.encode(init_text, add_special_tokens=False)
-                if init_ids and new_id != tokenizer.unk_token_id:
-                    in_emb[new_id].copy_(in_emb[init_ids].mean(dim=0))
-                    if out_emb is not None and out_emb.data_ptr() != in_emb.data_ptr():
-                        out_emb[new_id].copy_(out_emb[init_ids].mean(dim=0))
+                    new_id   = tokenizer.convert_tokens_to_ids(special_tok)
+                    init_ids = tokenizer.encode(init_text, add_special_tokens=False)
+                    if init_ids and new_id != tokenizer.unk_token_id:
+                        in_emb[new_id].copy_(in_emb[init_ids].mean(dim=0))
+                        if out_emb is not None and out_emb.data_ptr() != in_emb.data_ptr():
+                            out_emb[new_id].copy_(out_emb[init_ids].mean(dim=0))
 
     return num_added
 

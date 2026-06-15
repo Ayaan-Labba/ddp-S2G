@@ -70,7 +70,7 @@ def main() -> None:
         model = model.half()
         
     tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.ssi.warm)
 
     tasks = VARIANT_TO_TASKS[cfg.model.model_variant]
 

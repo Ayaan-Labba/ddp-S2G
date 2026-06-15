@@ -251,7 +251,7 @@ def main() -> None:
 
     use_rejection = "<null>" in tokenizer.get_vocab()
     tokens = S2GTokens(model_variant, use_rejection=use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.ssi.warm)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()

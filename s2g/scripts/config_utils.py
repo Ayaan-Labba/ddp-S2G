@@ -83,6 +83,7 @@ class SSIConfig:
     use_rejection: bool = False
     use_nesting: bool = True
     ssi_prompt: str = "ssi"
+    warm: bool = True
 
 @dataclass
 class CheckpointConfig:
