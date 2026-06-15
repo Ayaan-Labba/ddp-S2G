@@ -138,6 +138,8 @@ def main() -> None:
     args = parser.parse_args()
 
     tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint)
+    if hasattr(model.generation_config, "forced_bos_token_id"):
+        model.generation_config.forced_bos_token_id = None
     model_variant = (Path(args.checkpoint) / "model_variant.txt").read_text(encoding="utf-8").strip() if (Path(args.checkpoint) / "model_variant.txt").exists() else "pipeline"
     
     if (Path(args.checkpoint) / "tasks.json").exists():

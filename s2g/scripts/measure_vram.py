@@ -319,6 +319,8 @@ def main() -> None:
     logger.info("Loading model and tokenizer: %s", cfg.model.name)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
+    if hasattr(model.generation_config, "forced_bos_token_id"):
+        model.generation_config.forced_bos_token_id = None
     tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model)
     model.to(device)

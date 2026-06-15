@@ -193,8 +193,8 @@ def build_boundary_re_encoder_input(
 def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_order: bool = False, tok: AnyTokens = S2GTokens("boundary_joint"), ssi_prompt: str = "ssi") -> str:
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List all entities and all relations of types [{', '.join(types)}] in the given text: "
-        return f"{prefix}  {text}"
+        r_types_str = ", ".join(f"'{r}'" for r in types)
+        return f"Identify all the entities in the given text and find relations of types [{r_types_str}] among them: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -207,8 +207,9 @@ def build_joint_encoder_input(
     if ssi_prompt == "natural":
         ent_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List all entities of types [{', '.join(ent_types)}] and all relations of types [{', '.join(r_types)}] among them in the given text:"
-        return f"{prefix}  {text}"
+        ent_types_str = ", ".join(f"'{e}'" for e in ent_types)
+        r_types_str = ", ".join(f"'{r}'" for r in r_types)
+        return f"Identify all entities of types [{ent_types_str}] in the given text and find relations of types [{r_types_str}] among them: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:

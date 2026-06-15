@@ -385,11 +385,20 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _batch_idx(self, hyp_idx: int) -> int: 
         return hyp_idx // self.num_beams
 
-    def _is_extract_active(self, seq: List[int]) -> bool:
+    def _is_extract_active(self, seq: List[int], task: str) -> bool:
         if not seq:
             return False
         text = self.tokenizer.decode(seq)
-        return "TRIPLETS:" in text and "MISSING:" not in text
+        if task in {"re", "boundary_re"}:
+            return "TRIPLETS:" in text and "MISSING:" not in text
+        if task == "joint":
+            in_entities = "ENTITIES" in text and "<ent>" in text and "RELATIONS" not in text
+            in_relations = "RELATIONS" in text and "<head>" in text and "MISSING" not in text
+            return in_entities or in_relations
+        if task == "boundary_joint":
+            in_relations = "RELATIONS" in text and "<head>" in text and "MISSING" not in text
+            return in_relations
+        return True
 
     def _source_copy_next(self, batch_idx: int, span_tokens: List[int]) -> FrozenSet[int]:
         equiv_map = self._equiv_maps[batch_idx]
@@ -616,13 +625,16 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.rel_id}) or frozenset({self.eos_id})
+                exits = {self.rel_id}
+                if not state.span_tokens:
+                    exits.add(self.nest_id)
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.REL_LABEL:
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
+                exits = {self.head_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.NEST:
@@ -686,9 +698,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             last_token = seq[-1]
             task = self._tasks[self._batch_idx(h)]
             
-            is_active = True
-            if task in {"re", "boundary_re"}:
-                is_active = self._is_extract_active(seq)
+            is_active = self._is_extract_active(seq, task)
                 
             if not is_active:
                 new_cache[seq_tuple] = _HypState()
@@ -702,13 +712,10 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 for idx in range(len(seq)):
                     tok = seq[idx]
                     sub_seq = seq[:idx+1]
-                    if task in {"re", "boundary_re"}:
-                        if self._is_extract_active(sub_seq):
-                            self._transition(state, tok, task)
-                        else:
-                            state.fsm_state = FSMState.START
-                    else:
+                    if self._is_extract_active(sub_seq, task):
                         self._transition(state, tok, task)
+                    else:
+                        state.fsm_state = FSMState.START
                     
             new_cache[seq_tuple] = state
 

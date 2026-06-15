@@ -30,6 +30,8 @@ class S2GModel:
         logger.info("Loading tokenizer and model from %s", model_name_or_path)
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(model_name_or_path)
         self.model: PreTrainedModel = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path, torch_dtype="auto")
+        if hasattr(self.model.generation_config, "forced_bos_token_id"):
+            self.model.generation_config.forced_bos_token_id = None
 
         use_rejection = "<null>" in self.tokenizer.get_vocab()
         self._tokens = S2GTokens(model_variant, use_rejection=use_rejection)
@@ -88,6 +90,8 @@ class S2GModel:
 
         instance.tokenizer = AutoTokenizer.from_pretrained(str(path))
         instance.model = AutoModelForSeq2SeqLM.from_pretrained(str(path), torch_dtype="auto")
+        if hasattr(instance.model.generation_config, "forced_bos_token_id"):
+            instance.model.generation_config.forced_bos_token_id = None
 
         use_rejection = "<null>" in instance.tokenizer.get_vocab()
         instance._tokens = S2GTokens(model_variant, use_rejection=use_rejection)
