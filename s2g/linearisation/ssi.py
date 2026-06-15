@@ -194,7 +194,7 @@ def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_o
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         r_types_str = ", ".join(f"'{r}'" for r in types)
-        return f"Identify all the entities in the given text and find relations of types [{r_types_str}] among them: \"{text}\""
+        return f"Identify all the entities and find relations of types [{r_types_str}] among them in the given text: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -209,7 +209,7 @@ def build_joint_encoder_input(
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         ent_types_str = ", ".join(f"'{e}'" for e in ent_types)
         r_types_str = ", ".join(f"'{r}'" for r in r_types)
-        return f"Identify all entities of types [{ent_types_str}] in the given text and find relations of types [{r_types_str}] among them: \"{text}\""
+        return f"Identify all entities of types [{ent_types_str}] and find relations of types [{r_types_str}] among them in the given text: \"{text}\""
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
