@@ -74,6 +74,31 @@ def build_sel(
     if random_sel: 
         random.shuffle(blocks)
 
+    if task in {"re", "boundary_re"}:
+        triplets = []
+        for ent in blocks:
+            rels = list(ent["relations"]) if random_sel else ent["relations"]
+            if random_sel: 
+                random.shuffle(rels)
+            for rel in rels:
+                if task == "re":
+                    head_type = ent.get("type") or ""
+                    tail_type = rel.get("tail_type") or ""
+                    triplets.append(f"[[{ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type}]]")
+                else:
+                    triplets.append(f"[[{ent['text']}, {rel['type']}, {rel['tail']}]]")
+        if not triplets:
+            return ""
+        parts = ["Relations: " + ", ".join(triplets)]
+        if use_rejection and rejected_rel_types:
+            r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
+            if len(r_types) > 1:
+                missing_str = ", ".join(r_types[:-1]) + f" and {r_types[-1]}"
+            else:
+                missing_str = r_types[0]
+            parts.append(f"{tok.null} missing relations: {missing_str}.")
+        return " ".join(parts)
+
     if task in {"joint", "boundary_joint"}:
         parts = []
         ent_parts = []
@@ -124,7 +149,7 @@ def build_sel(
             parts.extend([tok.ent_start, ent['text']])
             continue
         
-        if task in {"re", "boundary_re", "pipeline_re", "pipeline_boundary_re"} and not rels:
+        if task in {"pipeline_re", "pipeline_boundary_re"} and not rels:
             continue
 
         if task in {"pipeline_re", "pipeline_boundary_re"}:
@@ -142,41 +167,17 @@ def build_sel(
                     if task == "pipeline_re":
                         ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
             parts.append(" ".join(ent_parts))
-        elif task in {"re", "boundary_re"}:
-            triplets = []
-            for ent in blocks:
-                rels = list(ent["relations"]) if random_sel else ent["relations"]
-                if random_sel:
-                    random.shuffle(rels)
-                for rel in rels:
-                    if task == "re":
-                        head_type = ent.get("type") or ""
-                        tail_type = rel.get("tail_type") or ""
-                        triplets.append(f"[[{ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type}]]")
-                    else:
-                        triplets.append(f"[[{ent['text']}, {rel['type']}, {rel['tail']}]]")
-            if triplets:
-                parts.append("Relations: " + ", ".join(triplets))
         elif task == "ner":
             ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
             parts.append(" ".join(ent_parts))
 
     if task != "boundary" and use_rejection:
-        if task in {"re", "boundary_re"}:
-            if rejected_rel_types:
-                r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
-                if len(r_types) > 1:
-                    missing_str = ", ".join(r_types[:-1]) + f" and {r_types[-1]}"
-                else:
-                    missing_str = r_types[0]
-                parts.append(f"{tok.null} missing relations: {missing_str}.")
-        else:
-            _append_null_block(
-                parts, tok, 
-                ent_types=(rejected_ent_types or []) if task in {"ner", "joint", "pipeline_re"} else [],
-                rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else [],
-                random_sel=random_sel
-            )
+        _append_null_block(
+            parts, tok, 
+            ent_types=(rejected_ent_types or []) if task in {"ner", "joint", "pipeline_re"} else [],
+            rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else [],
+            random_sel=random_sel
+        )
 
     return " ".join(parts)
 
