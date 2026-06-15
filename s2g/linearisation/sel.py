@@ -141,16 +141,17 @@ def build_sel(
 
     if task in {"joint", "boundary_joint"}:
         parts = []
-        
-        # 1. ENTITIES Section (Only for joint)
-        if task == "joint":
-            ent_parts = []
-            for ent in blocks:
+        ent_parts = []
+        for ent in blocks:
+            if task == "joint":
                 ent_parts.extend([tok.ent_start, ent['text'], tok.type_, ent.get('type') or ''])
-            ent_str = " ".join(ent_parts)
-            parts.append(f"ENTITIES: {ent_str}" if ent_str else "ENTITIES:")
+            else:  # boundary_joint
+                ent_parts.extend([tok.ent_start, ent['text']])
+        if ent_parts:
+            parts.append(" ".join(ent_parts))
 
-        # 2. RELATIONS Section (For both joint and boundary_joint)
+        parts.append(tok.graph)
+
         triplet_parts = []
         for ent in blocks:
             rels = list(ent["relations"]) if random_sel else ent["relations"]
@@ -162,28 +163,21 @@ def build_sel(
             ent_triplet = []
             for i, rel in enumerate(rels):
                 if i == 0 or not use_nesting:
-                    ent_triplet.extend([tok.head, ent['text']])
-                    ent_triplet.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
                     ent_triplet.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
-        triplet_str = " ".join(triplet_parts)
-        parts.append(f"RELATIONS: {triplet_str}" if triplet_str else "RELATIONS:")
+        if triplet_parts:
+            parts.append(" ".join(triplet_parts))
 
-        # 3. MISSING Sections (Only if use_rejection is True)
         if use_rejection:
-            if task == "joint":
-                e_types = (rejected_ent_types or [])
-                e_types = random.sample(e_types, len(e_types)) if random_sel else sorted(e_types)
-                ent_missing_str = ", ".join(f"'{e}'" for e in e_types)
-                parts.append(f"MISSING ENTITIES: {ent_missing_str}" if ent_missing_str else "MISSING ENTITIES:")
-
-            r_types = (rejected_rel_types or [])
-            r_types = random.sample(r_types, len(r_types)) if random_sel else sorted(r_types)
-            rel_missing_str = ", ".join(f"'{r}'" for r in r_types)
-            parts.append(f"MISSING RELATIONS: {rel_missing_str}" if rel_missing_str else "MISSING RELATIONS:")
-
+            _append_null_block(
+                parts, tok, 
+                ent_types=(rejected_ent_types or []) if task in {"ner", "joint"} else [],
+                rel_types=(rejected_rel_types or []) if task in {"re", "boundary_re", "boundary_joint", "joint"} else [],
+                random_sel=random_sel
+            )
         return " ".join(parts)
 
     parts = []
@@ -245,69 +239,22 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
     tokens = [t.strip() for t in pattern.split(text) if t.strip()]
 
     if tok.variant in {"joint", "boundary_joint"}:
-        has_headers = any(h in text for h in ["ENTITIES:", "RELATIONS:", "MISSING ENTITIES:", "MISSING RELATIONS:"])
-        
-        if has_headers:
-            idx_ent = text.find("ENTITIES:")
-            idx_rel = text.find("RELATIONS:")
-            idx_m_ent = text.find("MISSING ENTITIES:")
-            idx_m_rel = text.find("MISSING RELATIONS:")
-            
-            headers = [
-                ("ENTITIES:", idx_ent),
-                ("RELATIONS:", idx_rel),
-                ("MISSING ENTITIES:", idx_m_ent),
-                ("MISSING RELATIONS:", idx_m_rel)
-            ]
-            present_headers = sorted([h for h in headers if h[1] != -1], key=lambda x: x[1])
-            
-            sections = {}
-            for idx, (h_name, h_idx) in enumerate(present_headers):
-                start = h_idx + len(h_name)
-                end = present_headers[idx + 1][1] if idx + 1 < len(present_headers) else len(text)
-                sections[h_name] = text[start:end].strip()
-                
-            entities_str = sections.get("ENTITIES:", "")
-            relations_str = sections.get("RELATIONS:", "")
-            missing_ent_str = sections.get("MISSING ENTITIES:", "")
-            missing_rel_str = sections.get("MISSING RELATIONS:", "")
-            
-            entity_list = []
-            entity_dict = {}
-            rejected = []
-            
-            special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
-            pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
-            
-            # Parse Entities
-            if entities_str:
-                ent_tokens = [t.strip() for t in pattern.split(entities_str) if t.strip()]
-                state = "IDLE"
-                current_ent_text = []
-                current_ent_type = []
-                
-                for t in ent_tokens:
-                    if t == tok.ent_start:
-                        if current_ent_text:
-                            ent_text = " ".join(current_ent_text)
-                            ent_type = " ".join(current_ent_type) if current_ent_type else None
-                            if ent_text not in entity_dict:
-                                block = {"text": ent_text, "type": ent_type, "relations": []}
-                                entity_list.append(block)
-                                entity_dict[ent_text] = block
-                        current_ent_text.clear()
-                        current_ent_type.clear()
-                        state = "ENT_TEXT"
-                    elif t == tok.type_:
-                        if state == "ENT_TEXT":
-                            state = "ENT_TYPE"
-                            current_ent_type.clear()
-                    else:
-                        if state == "ENT_TEXT":
-                            current_ent_text.append(t)
-                        elif state == "ENT_TYPE":
-                            current_ent_type.append(t)
-                            
+        state = "IDLE"
+        current_ent_text = []
+        current_ent_type = []
+        current_head_parts = []
+        current_rel_parts = []
+        current_tail_parts = []
+        current_lbl_parts = []
+        last_null = None
+
+        entity_list = []
+        entity_dict = {}
+        rejected = []
+
+        def flush_current_state():
+            nonlocal state, last_null
+            if state in {"ENT_TEXT", "ENT_TYPE"}:
                 if current_ent_text:
                     ent_text = " ".join(current_ent_text)
                     ent_type = " ".join(current_ent_type) if current_ent_type else None
@@ -315,190 +262,108 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
                         block = {"text": ent_text, "type": ent_type, "relations": []}
                         entity_list.append(block)
                         entity_dict[ent_text] = block
-
-            # Parse Relations
-            if relations_str:
-                rel_tokens = [t.strip() for t in pattern.split(relations_str) if t.strip()]
-                state = "IDLE"
-                current_head_parts = []
-                current_rel_parts = []
-                current_tail_parts = []
-                last_head_text = ""
-                
-                def flush_relation():
-                    nonlocal last_head_text
-                    if current_head_parts:
-                        last_head_text = " ".join(current_head_parts)
-                    if last_head_text and current_rel_parts and current_tail_parts:
-                        head_text = last_head_text
-                        rel_type = " ".join(current_rel_parts)
-                        tail_text = " ".join(current_tail_parts)
-                        
-                        if head_text not in entity_dict:
-                            block = {"text": head_text, "type": None, "relations": []}
-                            entity_list.append(block)
-                            entity_dict[head_text] = block
-                            
-                        tail_type = entity_dict[tail_text]["type"] if tail_text in entity_dict else None
-                        entity_dict[head_text]["relations"].append({
-                            "type": rel_type,
-                            "tail": tail_text,
-                            "tail_type": tail_type
-                        })
-                        current_rel_parts.clear()
-                        current_tail_parts.clear()
-                        
-                i_tok = 0
-                n_tok = len(rel_tokens)
-                while i_tok < n_tok:
-                    t = rel_tokens[i_tok]
-                    if t == getattr(tok, "head", None):
-                        flush_relation()
-                        if i_tok + 1 < n_tok and rel_tokens[i_tok + 1] == getattr(tok, "nest", None):
-                            i_tok += 2
-                            state = "REL"
-                            current_rel_parts.clear()
-                            current_tail_parts.clear()
-                        else:
-                            state = "HEAD"
-                            current_head_parts.clear()
-                            i_tok += 1
-                    elif t == tok.rel:
-                        flush_relation()
-                        state = "REL"
-                        current_rel_parts.clear()
-                        i_tok += 1
-                    elif t == tok.tail:
-                        state = "TAIL"
-                        current_tail_parts.clear()
-                        i_tok += 1
-                    else:
-                        if state == "HEAD":
-                            current_head_parts.append(t)
-                        elif state == "REL":
-                            current_rel_parts.append(t)
-                        elif state == "TAIL":
-                            current_tail_parts.append(t)
-                        i_tok += 1
-                flush_relation()
-
-            # Parse Missing
-            if missing_ent_str:
-                for type_name in re.findall(r"'(.*?)'", missing_ent_str):
-                    rejected.append({"kind": "type", "label": type_name.strip()})
-            if missing_rel_str:
-                for rel_name in re.findall(r"'(.*?)'", missing_rel_str):
-                    rejected.append({"kind": "rel", "label": rel_name.strip()})
-                    
-            return _deduplicate_entities(entity_list), rejected
-            
-        else:
-            state = "IDLE"
-            current_ent_text = []
-            current_ent_type = []
-            current_head_parts = []
-            current_rel_parts = []
-            current_tail_parts = []
-            current_lbl_parts = []
-            last_null = None
-
-            entity_list = []
-            entity_dict = {}
-            rejected = []
-
-            def flush_current_state():
-                nonlocal state, last_null
-                if state in {"ENT_TEXT", "ENT_TYPE"}:
-                    if current_ent_text:
-                        ent_text = " ".join(current_ent_text)
-                        ent_type = " ".join(current_ent_type) if current_ent_type else None
-                        if ent_text not in entity_dict:
-                            block = {"text": ent_text, "type": ent_type, "relations": []}
-                            entity_list.append(block)
-                            entity_dict[ent_text] = block
-                        current_ent_text.clear()
-                        current_ent_type.clear()
-                elif state == "TAIL":
-                    if current_head_parts and current_rel_parts and current_tail_parts:
-                        head_text = " ".join(current_head_parts)
-                        rel_type = " ".join(current_rel_parts)
-                        tail_text = " ".join(current_tail_parts)
-                        
-                        if head_text not in entity_dict:
-                            block = {"text": head_text, "type": None, "relations": []}
-                            entity_list.append(block)
-                            entity_dict[head_text] = block
-                        
-                        tail_type = entity_dict[tail_text]["type"] if tail_text in entity_dict else None
-                        
-                        entity_dict[head_text]["relations"].append({
-                            "type": rel_type,
-                            "tail": tail_text,
-                            "tail_type": tail_type
-                        })
-                        current_rel_parts.clear()
-                        current_tail_parts.clear()
-                elif state == "NULL":
-                    if current_lbl_parts:
-                        label_str = " ".join(current_lbl_parts)
-                        if label_str:
-                            rejected.append({"kind": last_null or "rel", "label": label_str})
-                        current_lbl_parts.clear()
-
-            for t in tokens:
-                if t == tok.ent_start:
-                    flush_current_state()
-                    state = "ENT_TEXT"
                     current_ent_text.clear()
                     current_ent_type.clear()
-                elif t == getattr(tok, "head", None):
+            elif state == "TAIL":
+                if current_head_parts and current_rel_parts and current_tail_parts:
+                    head_text = " ".join(current_head_parts)
+                    rel_type = " ".join(current_rel_parts)
+                    tail_text = " ".join(current_tail_parts)
+                    
+                    if head_text not in entity_dict:
+                        block = {"text": head_text, "type": None, "relations": []}
+                        entity_list.append(block)
+                        entity_dict[head_text] = block
+                    
+                    tail_type = entity_dict[tail_text]["type"] if tail_text in entity_dict else None
+                    
+                    entity_dict[head_text]["relations"].append({
+                        "type": rel_type,
+                        "tail": tail_text,
+                        "tail_type": tail_type
+                    })
+                    current_rel_parts.clear()
+                    current_tail_parts.clear()
+            elif state == "NULL":
+                if current_lbl_parts:
+                    label_str = " ".join(current_lbl_parts)
+                    if label_str:
+                        rejected.append({"kind": last_null or "rel", "label": label_str})
+                    current_lbl_parts.clear()
+
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t == tok.ent_start:
+                flush_current_state()
+                state = "ENT_TEXT"
+                current_ent_text.clear()
+                current_ent_type.clear()
+                i += 1
+            elif t == getattr(tok, "head", None):
+                if i + 1 < len(tokens) and tokens[i + 1] == getattr(tok, "nest", None):
+                    flush_current_state()
+                    state = "IDLE"
+                    i += 2
+                else:
                     flush_current_state()
                     state = "HEAD"
                     current_head_parts.clear()
-                elif t == tok.type_:
-                    if state == "ENT_TEXT":
-                        state = "ENT_TYPE"
-                        current_ent_type.clear()
-                    elif state == "NULL":
-                        flush_current_state()
-                        last_null = "type"
-                    else:
-                        pass
-                elif t == tok.rel:
-                    if state == "NULL":
-                        flush_current_state()
-                        last_null = "rel"
-                    else:
-                        flush_current_state()
-                        state = "REL"
-                        current_rel_parts.clear()
-                elif t == tok.tail:
-                    state = "TAIL"
-                    current_tail_parts.clear()
-                elif t == getattr(tok, "nest", None):
+                    i += 1
+            elif t == tok.type_:
+                if state == "ENT_TEXT":
+                    state = "ENT_TYPE"
+                    current_ent_type.clear()
+                elif state == "NULL":
                     flush_current_state()
-                    state = "IDLE"
-                elif t == tok.null:
-                    flush_current_state()
-                    state = "NULL"
-                    last_null = None
-                    current_lbl_parts.clear()
+                    last_null = "type"
                 else:
-                    if state == "ENT_TEXT":
-                        current_ent_text.append(t)
-                    elif state == "ENT_TYPE":
-                        current_ent_type.append(t)
-                    elif state == "HEAD":
-                        current_head_parts.append(t)
-                    elif state == "REL":
-                        current_rel_parts.append(t)
-                    elif state == "TAIL":
-                        current_tail_parts.append(t)
-                    elif state == "NULL":
-                        current_lbl_parts.append(t)
+                    pass
+                i += 1
+            elif t == tok.rel:
+                if state == "NULL":
+                    flush_current_state()
+                    last_null = "rel"
+                else:
+                    flush_current_state()
+                    state = "REL"
+                    current_rel_parts.clear()
+                i += 1
+            elif t == tok.tail:
+                state = "TAIL"
+                current_tail_parts.clear()
+                i += 1
+            elif t == getattr(tok, "nest", None):
+                flush_current_state()
+                state = "IDLE"
+                i += 1
+            elif t == getattr(tok, "graph", None):
+                flush_current_state()
+                state = "IDLE"
+                i += 1
+            elif t == tok.null:
+                flush_current_state()
+                state = "NULL"
+                last_null = None
+                current_lbl_parts.clear()
+                i += 1
+            else:
+                if state == "ENT_TEXT":
+                    current_ent_text.append(t)
+                elif state == "ENT_TYPE":
+                    current_ent_type.append(t)
+                elif state == "HEAD":
+                    current_head_parts.append(t)
+                elif state == "REL":
+                    current_rel_parts.append(t)
+                elif state == "TAIL":
+                    current_tail_parts.append(t)
+                elif state == "NULL":
+                    current_lbl_parts.append(t)
+                i += 1
 
-            flush_current_state()
-            return _deduplicate_entities(entity_list), rejected
+        flush_current_state()
+        return _deduplicate_entities(entity_list), rejected
 
     if tok.variant in {"re", "boundary_re"}:
         entities: List[EntityBlock] = []

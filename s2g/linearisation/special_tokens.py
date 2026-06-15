@@ -13,6 +13,7 @@ _ALL_ATTR_NAMES: List[str] = [
     "bound", "ner", "re", "type_", "rel",
     "ent_start", "ent_end", "tail", "null",
     "head", "nest", "text", "trip", "sep",
+    "graph",
 ]
 
 
@@ -35,6 +36,7 @@ class S2GTokens:
         self.text      = "<text>"
         self.trip      = "<trip>"
         self.sep       = "<sep>"
+        self.graph     = "<graph>"
 
         active_map = {
             "boundary":          {"bound", "ent_start", "ent_end"},
@@ -43,8 +45,8 @@ class S2GTokens:
             "boundary_re":       {"re", "text", "head", "rel", "tail", "nest"},
             "pipeline":          {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
             "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
-            "boundary_joint":    {"re", "text", "head", "rel", "tail", "nest", "ent_start"},
-            "joint":             {"ner", "re", "text", "head", "type_", "rel", "tail", "nest", "ent_start"},
+            "boundary_joint":    {"re", "text", "head", "rel", "tail", "nest", "ent_start", "graph"},
+            "joint":             {"ner", "re", "text", "head", "type_", "rel", "tail", "nest", "ent_start", "graph"},
         }
         self._active = set(active_map.get(variant, active_map["pipeline"]))
         if use_rejection or variant != "boundary":
@@ -117,6 +119,7 @@ def add_special_tokens_to_tokenizer(
             tokens.ent_start: "entity span start",
             tokens.ent_end:   "entity span end",
             tokens.null:      "did not find",
+            tokens.graph:     "graph",
         }
 
         # Reverse map: token string → attribute name
