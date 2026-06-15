@@ -131,8 +131,17 @@ def build_re_encoder_input(
     if ssi_prompt == "natural":
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         e_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-        prefix = f"List all relations of types [{', '.join(r_types)}] among the entities of types [{', '.join(e_types)}] in the given text: "
-        return f"{prefix}  {text}"
+        return (
+            f"Task: Analyze the text to identify domain entities and their interactions based on the allowed schema.\n\n"
+            f"Allowed Relation Types: {r_types}\n"
+            f"Allowed Entity Types: {e_types}\n\n"
+            f"Text: \"{text}\"\n\n"
+            f"Instructions: \n"
+            f"1. Write a narrative summary mapping out every connection found. \n"
+            f"2. Convert that summary into structured triple tokens.\n"
+            f"3. Identify which of the allowed relation types were completely absent from the text.\n\n"
+            f"Output:"
+        )
     elif ssi_prompt == "false":
         return text
     else:
@@ -163,9 +172,17 @@ def build_boundary_re_encoder_input(
     random_order: bool = False, tok: AnyTokens = S2GTokens("boundary_re"), ssi_prompt: str = "ssi"
 ) -> str:
     if ssi_prompt == "natural":
-        types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        prefix = f"List all relations of types [{', '.join(types)}] among the entities in the given text: "
-        return f"{prefix}  {text}"
+        r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
+        return (
+            f"Task: Analyze the text to identify entities and their interactions based on the allowed schema.\n\n"
+            f"Allowed Relation Types: {r_types}\n\n"
+            f"Text: \"{text}\"\n\n"
+            f"Instructions: \n"
+            f"1. Write a narrative summary mapping out every connection found. \n"
+            f"2. Convert that summary into structured triple tokens.\n"
+            f"3. Identify which of the allowed relation types were completely absent from the text.\n\n"
+            f"Output:"
+        )
     elif ssi_prompt == "false":
         return text
     else:

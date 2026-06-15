@@ -20,8 +20,8 @@ from s2g.linearisation import (
     S2GTokens, AnyTokens, EntityBlock, VARIANT_TO_TASKS,
     add_special_tokens_to_tokenizer, build_boundary_encoder_input,
     build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_ner_encoder_input, build_re_encoder_input, extract_triplets,
-    find_all_token_spans, parse_sel,
+    build_ner_encoder_input, build_re_encoder_input, build_boundary_re_encoder_input,
+    build_pipeline_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
 )
 from s2g.model import build_constraint_processor
 from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
@@ -118,14 +118,19 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
                 else:
                     entity_data = [(int(e["offset"][0]), int(e["offset"][1]), "") for e in inst["entities"]]
                     ner_maps.append({e["text"]: "" for e in inst["entities"]})
-                r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], entity_data, False, tokens, ssi_prompt=ssi_prompt))
+                if tokens.variant == "re":
+                    r_inputs.append(build_re_encoder_input(entity_schema, rel_schema, inst["text"], False, tokens, ssi_prompt=ssi_prompt))
+                elif tokens.variant == "boundary_re":
+                    r_inputs.append(build_boundary_re_encoder_input(rel_schema, inst["text"], False, tokens, ssi_prompt=ssi_prompt))
+                else:
+                    r_inputs.append(build_pipeline_re_encoder_input(rel_schema, inst["tokens"], entity_data, False, tokens, ssi_prompt=ssi_prompt))
         else:
             for inst, b, n in zip(instances, b_per_inst, n_per_inst):
                 if use_ner:
-                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens, ssi_prompt=ssi_prompt))
+                    r_inputs.append(build_pipeline_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], n, use_type=True), False, tokens, ssi_prompt=ssi_prompt))
                     ner_maps.append({e["text"]: e.get("type", "") for e in n})
                 else:
-                    r_inputs.append(build_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens, ssi_prompt=ssi_prompt))
+                    r_inputs.append(build_pipeline_re_encoder_input(rel_schema, inst["tokens"], _to_entity_data(inst["tokens"], b, use_type=False), False, tokens, ssi_prompt=ssi_prompt))
                     ner_maps.append({e["text"]: "" for e in b})
         r_per_inst = _run(r_inputs)
     else:
@@ -156,10 +161,10 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
         
     if use_re:
         g_quints = [[(r["head"]["text"], r["head"].get("type","") if use_ner else "", r["type"], r["tail"]["text"], r["tail"].get("type","") if use_ner else "") for r in inst["relations"]] for inst in instances]
-        m.update(compute_metrics_for_task("re", all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], ner_maps[i].get(e["text"], ""), rel["type"], rel["tail"], ner_maps[i].get(rel["tail"], "")) for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
+        m.update(compute_metrics_for_task("re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], ner_maps[i].get(e["text"], ""), rel["type"], rel["tail"], ner_maps[i].get(rel["tail"], "")) for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
 
     if use_boundary_re:
-        m.update(compute_metrics_for_task("boundary_re", all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances]))
+        m.update(compute_metrics_for_task("boundary_re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances]))
 
     return per_inst, m
 

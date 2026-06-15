@@ -80,6 +80,7 @@ def main() -> None:
         "use_rejection": cfg.ssi.use_rejection,
         "use_nesting": getattr(cfg.ssi, "use_nesting", True),
         "ssi_prompt": cfg.ssi.ssi_prompt,
+        "data_dir": cfg.data.data_dir,
     })
 
     variant_to_callback_task = {

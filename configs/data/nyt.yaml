@@ -27,3 +27,29 @@ relations:
   profession: profession
   religion: religion
   teams: teams
+
+expanded_relations:
+  administrative divisions: administrative divisions
+  advisors: advisors
+  capital: capital
+  children: children
+  company: company
+  contains: contains
+  country: country
+  ethnicity: ethnicity
+  founders: founders
+  geographic distribution: geographic distribution
+  industry: industry
+  location: location
+  major shareholder of: major shareholder of
+  major shareholders: major shareholders
+  nationality: nationality
+  neighborhood of: neighborhood of
+  people: people
+  place founded: place founded
+  place lived: place lived
+  place of birth: place of birth
+  place of death: place of death
+  profession: profession
+  religion: religion
+  teams: teams

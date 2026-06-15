@@ -66,7 +66,8 @@ def build_sel(
         rejected_rel_types: Optional[List[str]] = None, 
         random_sel: bool = False,
         use_rejection: bool = False,
-        use_nesting: bool = True
+        use_nesting: bool = True,
+        rel_map: Optional[Dict[str, str]] = None
     ) -> str:
     if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint"}:
         raise ValueError(f"Unknown task {task!r}.")
@@ -75,28 +76,67 @@ def build_sel(
         random.shuffle(blocks)
 
     if task in {"re", "boundary_re"}:
-        triplets = []
+        rel_map = rel_map or {}
+        analysis_parts = []
+        extract_parts = []
+
         for ent in blocks:
             rels = list(ent["relations"]) if random_sel else ent["relations"]
             if random_sel: 
                 random.shuffle(rels)
-            for rel in rels:
+            if not rels:
+                continue
+
+            # --- [ANALYSIS] ---
+            head_text = ent['text']
+            ent_analysis = []
+            if task == "re":
+                head_type = ent.get('type') or ''
+                ent_analysis.append(f"{head_text} [{head_type}]")
+                rel_str_list = []
+                for rel in rels:
+                    rel_expanded = rel_map.get(rel['type'], rel['type'])
+                    tail_text = rel['tail']
+                    tail_type = rel.get('tail_type') or ''
+                    rel_str_list.append(f"{rel_expanded} {tail_text} [{tail_type}]")
+            else:  # boundary_re
+                ent_analysis.append(head_text)
+                rel_str_list = []
+                for rel in rels:
+                    rel_expanded = rel_map.get(rel['type'], rel['type'])
+                    tail_text = rel['tail']
+                    rel_str_list.append(f"{rel_expanded} {tail_text}")
+            
+            ent_analysis.append(" ; ".join(rel_str_list))
+            analysis_parts.append(" ".join(ent_analysis))
+
+            # --- [EXTRACT] ---
+            for i, rel in enumerate(rels):
                 if task == "re":
-                    head_type = ent.get("type") or ""
-                    tail_type = rel.get("tail_type") or ""
-                    triplets.append(f"( {ent['text']}:{head_type}, {rel['type']}, {rel['tail']}:{tail_type})")
-                else:
-                    triplets.append(f"( {ent['text']}, {rel['type']}, {rel['tail']})")
-        if not triplets:
-            return ""
-        parts = ["Relations: [" + ", ".join(triplets) + "]"]
+                    if i == 0 or not use_nesting:
+                        extract_parts.extend([tok.head, head_text, tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                    else:
+                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                else:  # boundary_re
+                    if i == 0 or not use_nesting:
+                        extract_parts.extend([tok.head, head_text, tok.rel, rel['type'], tok.tail, rel['tail']])
+                    else:
+                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+
+        analysis_str = " . ".join(analysis_parts)
+        extract_str = " ".join(extract_parts)
+
         if use_rejection and rejected_rel_types:
             r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
-            if len(r_types) > 1:
-                missing_str = ", ".join(r_types[:-1]) + f" and {r_types[-1]}"
-            else:
-                missing_str = r_types[0]
-            parts.append(f"{tok.null} missing relations: {missing_str}.")
+            missing_str = " , ".join(f"'{r}'" for r in r_types)
+        else:
+            missing_str = ""
+
+        parts = []
+        parts.append(f"[ANALYSIS] {analysis_str}" if analysis_str else "[ANALYSIS]")
+        parts.append(f"[EXTRACT] {extract_str}" if extract_str else "[EXTRACT]")
+        if use_rejection:
+            parts.append(f"[MISSING] {missing_str}" if missing_str else "[MISSING]")
         return " ".join(parts)
 
     if task in {"joint", "boundary_joint"}:
@@ -310,50 +350,90 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         entity_dict: Dict[str, EntityBlock] = {}
         rejected: List[RejectedItem] = []
         
-        has_types = tok.variant == "re"
+        # Extract only the [EXTRACT] portion of the text
+        if "[EXTRACT]" in text:
+            extract_part = text.split("[EXTRACT]", 1)[1]
+            if "[MISSING]" in extract_part:
+                extract_part = extract_part.split("[MISSING]", 1)[0]
+        else:
+            extract_part = text
+            
+        # Tokenize the extract part using special tokens
+        special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
+        pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
+        tokens = [t.strip() for t in pattern.split(extract_part) if t.strip()]
         
-        triplets = re.findall(r"\((.*?)\)", text)
-        for trip in triplets:
-            parts = [p.strip() for p in trip.split(",")]
-            if len(parts) != 3:
-                continue
-            head_str, rel, tail_str = parts[0], parts[1], parts[2]
-            if not head_str or not rel or not tail_str:
-                continue
-                
-            if has_types:
-                if ":" in head_str:
-                    head, head_type = head_str.rsplit(":", 1)
-                else:
-                    head, head_type = head_str, None
-                    
-                if ":" in tail_str:
-                    tail, tail_type = tail_str.rsplit(":", 1)
-                else:
-                    tail, tail_type = tail_str, None
-            else:
-                head, head_type = head_str, None
-                tail, tail_type = tail_str, None
-                
-            head = head.strip()
-            tail = tail.strip()
-            rel = rel.strip()
-            if head_type: head_type = head_type.strip()
-            if tail_type: tail_type = tail_type.strip()
+        state = "IDLE"
+        current_head_text = []
+        current_head_type = []
+        current_rel_type = []
+        current_tail_text = []
+        current_tail_type = []
+        
+        def flush_triplet():
+            nonlocal current_head_text, current_head_type, current_rel_type, current_tail_text, current_tail_type
+            h_txt = " ".join(current_head_text).strip()
+            r_typ = " ".join(current_rel_type).strip()
+            t_txt = " ".join(current_tail_text).strip()
+            h_typ = " ".join(current_head_type).strip() if current_head_type else None
+            t_typ = " ".join(current_tail_type).strip() if current_tail_type else None
             
-            if head not in entity_dict:
-                entity_dict[head] = {"text": head, "type": head_type, "relations": []}
-                entities.append(entity_dict[head])
-            else:
-                if head_type and not entity_dict[head].get("type"):
-                    entity_dict[head]["type"] = head_type
-                    
-            entity_dict[head]["relations"].append({
-                "type": rel,
-                "tail": tail,
-                "tail_type": tail_type
-            })
+            if h_txt and r_typ and t_txt:
+                if h_txt not in entity_dict:
+                    entity_dict[h_txt] = {"text": h_txt, "type": h_typ, "relations": []}
+                    entities.append(entity_dict[h_txt])
+                elif h_typ and not entity_dict[h_txt].get("type"):
+                    entity_dict[h_txt]["type"] = h_typ
+                
+                entity_dict[h_txt]["relations"].append({
+                    "type": r_typ,
+                    "tail": t_txt,
+                    "tail_type": t_typ
+                })
+            # Clear relation and tail for the next triplet
+            current_rel_type.clear()
+            current_tail_text.clear()
+            current_tail_type.clear()
             
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t == tok.head:
+                if i + 1 < len(tokens) and tokens[i + 1] == getattr(tok, "nest", None):
+                    flush_triplet()
+                    state = "IDLE"
+                    i += 2
+                    continue
+                else:
+                    flush_triplet()
+                    current_head_text.clear()
+                    current_head_type.clear()
+                    state = "HEAD_TEXT"
+                    i += 1
+                    continue
+            elif t == tok.type_:
+                if state == "HEAD_TEXT":
+                    state = "HEAD_TYPE"
+                elif state == "TAIL_TEXT":
+                    state = "TAIL_TYPE"
+            elif t == tok.rel:
+                state = "REL"
+            elif t == tok.tail:
+                state = "TAIL_TEXT"
+            else:
+                if state == "HEAD_TEXT":
+                    current_head_text.append(t)
+                elif state == "HEAD_TYPE":
+                    current_head_type.append(t)
+                elif state == "REL":
+                    current_rel_type.append(t)
+                elif state == "TAIL_TEXT":
+                    current_tail_text.append(t)
+                elif state == "TAIL_TYPE":
+                    current_tail_type.append(t)
+            i += 1
+            
+        flush_triplet()
         return _deduplicate_entities(entities), rejected
 
     state = _State.IDLE

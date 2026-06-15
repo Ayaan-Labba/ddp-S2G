@@ -54,6 +54,22 @@ class S2GCollator:
         }
         self._task_keys = [task_to_key.get(t, t) for t in self._tasks]
 
+        self._rel_map = {}
+        data_dir = config.get("data_dir")
+        if data_dir:
+            from pathlib import Path
+            import yaml
+            dataset_name = Path(data_dir).name
+            yaml_path = Path("configs") / "data" / f"{dataset_name}.yaml"
+            if yaml_path.exists():
+                try:
+                    with open(yaml_path, "r", encoding="utf-8") as f:
+                        data_cfg = yaml.safe_load(f)
+                    if data_cfg and "expanded_relations" in data_cfg:
+                        self._rel_map = data_cfg["expanded_relations"]
+                except Exception as e:
+                    pass
+
     @property
     def current_step(self) -> int: 
         return self._step
@@ -114,7 +130,7 @@ class S2GCollator:
                 pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
+            return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting, rel_map=self._rel_map)
 
     def _prepare_boundary_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         if self._variant == "boundary_pipeline":
@@ -135,7 +151,7 @@ class S2GCollator:
                 pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
             filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
-            return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting)
+            return enc, build_sel(filtered_blocks, "boundary_re", self._tok, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting, rel_map=self._rel_map)
 
     def _prepare_boundary_joint(self, inst: Dict, blocks: List) -> Tuple[str, str]:
         pos_rel, neg_rel = self._sample_types(

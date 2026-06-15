@@ -226,6 +226,18 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         self.re_triplet_end_seq = get_suffix_ids(")]")
         self.re_next_triplet_start_seq = get_suffix_ids("), (")
 
+        # Encode missing start token
+        missing_start_ids = []
+        for pfx in ("[MISSING]", " [MISSING]", "[ MISSING]", " [ MISSING]"):
+            missing_start_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
+        self.missing_start_ids = frozenset(missing_start_ids)
+
+        # Encode extract token
+        extract_ids = []
+        for pfx in ("[EXTRACT]", " [EXTRACT]", "[ EXTRACT]", " [ EXTRACT]"):
+            extract_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
+        self.extract_ids = frozenset(extract_ids)
+
         self._special_ids = frozenset(v for v in tid.values() if v is not None) | {self.eos_id, self.pad_id}
 
         self._source_token_sets, self._source_lists, self._token_to_positions = [], [], []
@@ -372,6 +384,12 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _batch_idx(self, hyp_idx: int) -> int: 
         return hyp_idx // self.num_beams
 
+    def _is_extract_active(self, seq: List[int]) -> bool:
+        if not seq:
+            return False
+        text = self.tokenizer.decode(seq)
+        return "[EXTRACT]" in text and "[MISSING]" not in text
+
     def _source_copy_next(self, batch_idx: int, span_tokens: List[int]) -> FrozenSet[int]:
         equiv_map = self._equiv_maps[batch_idx]
         if not span_tokens: 
@@ -422,134 +440,69 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
     def _transition(self, state: _HypState, token_id: int, task: str) -> None:
         if task in {"re", "boundary_re"}:
-            if token_id == self.eos_id:
-                state.re_state = REState.END
-                return
-            elif token_id == self.pad_id and state.re_state == REState.START:
-                return
-
-            if state.re_state == REState.START:
-                if token_id == self.re_prefix_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_prefix_seq):
-                        state.re_state = REState.EXPECT_TRIPLET_START
-                        state.re_match_buffer.clear()
-
-            elif state.re_state == REState.EXPECT_TRIPLET_START:
-                if token_id == self.re_triplet_start_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_triplet_start_seq):
-                        state.re_state = REState.HEAD_SPAN
-                        state.re_match_buffer.clear()
-                        state.span_tokens.clear()
-
-            elif state.re_state == REState.HEAD_SPAN:
-                sep_seq = self.re_type_sep_seq if task == "re" else self.re_element_sep_seq
-                if token_id == sep_seq[0]:
-                    state.re_match_buffer = [token_id]
-                    if len(state.re_match_buffer) == len(sep_seq):
-                        state.re_state = REState.TYPE_LABEL if task == "re" else REState.REL_LABEL
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
-                    else:
-                        state.re_state = REState.EXPECT_TYPE_SEP if task == "re" else REState.EXPECT_ELEMENT_SEP_1
+            if token_id == self.head_id:
+                state.fsm_state = FSMState.NEST
+                state.span_tokens.clear()
+                state.label_prefix.clear()
+            elif state.fsm_state == FSMState.NEST:
+                if token_id == self.nest_id:
+                    state.fsm_state = FSMState.INTER
+                else:
+                    state.fsm_state = FSMState.TRIPLET_HEAD_SPAN
+                    state.span_tokens.append(token_id)
+            elif state.fsm_state == FSMState.INTER:
+                if token_id == self.rel_id:
+                    state.fsm_state = FSMState.REL_LABEL
+                    state.label_prefix.clear()
+            elif state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
+                if task == "re" and token_id == self.type_id:
+                    state.fsm_state = FSMState.TYPE_LABEL
+                    state.label_prefix.clear()
+                elif task == "boundary_re" and token_id == self.rel_id:
+                    state.fsm_state = FSMState.REL_LABEL
+                    state.label_prefix.clear()
                 else:
                     state.span_tokens.append(token_id)
-
-            elif state.re_state == REState.EXPECT_TYPE_SEP:
-                if token_id == self.re_type_sep_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_type_sep_seq):
-                        state.re_state = REState.TYPE_LABEL
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
-
-            elif state.re_state == REState.TYPE_LABEL:
-                if token_id == self.re_element_sep_seq[0]:
-                    state.re_match_buffer = [token_id]
-                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
-                        state.re_state = REState.REL_LABEL
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
-                    else:
-                        state.re_state = REState.EXPECT_ELEMENT_SEP_1
+            elif state.fsm_state == FSMState.TYPE_LABEL:
+                if token_id == self.rel_id:
+                    state.fsm_state = FSMState.REL_LABEL
+                    state.label_prefix.clear()
                 else:
                     state.label_prefix.append(token_id)
-
-            elif state.re_state == REState.EXPECT_ELEMENT_SEP_1:
-                if token_id == self.re_element_sep_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
-                        state.re_state = REState.REL_LABEL
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
-
-            elif state.re_state == REState.REL_LABEL:
-                if token_id == self.re_element_sep_seq[0]:
-                    state.re_match_buffer = [token_id]
-                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
-                        state.re_state = REState.TAIL_SPAN
-                        state.re_match_buffer.clear()
-                        state.span_tokens.clear()
-                    else:
-                        state.re_state = REState.EXPECT_ELEMENT_SEP_2
-                else:
-                    state.label_prefix.append(token_id)
-
-            elif state.re_state == REState.EXPECT_ELEMENT_SEP_2:
-                if token_id == self.re_element_sep_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_element_sep_seq):
-                        state.re_state = REState.TAIL_SPAN
-                        state.re_match_buffer.clear()
-                        state.span_tokens.clear()
-
-            elif state.re_state == REState.TAIL_SPAN:
-                if task == "re":
-                    if token_id == self.re_type_sep_seq[0]:
-                        state.re_match_buffer = [token_id]
-                        if len(state.re_match_buffer) == len(self.re_type_sep_seq):
-                            state.re_state = REState.TAIL_TYPE_LABEL
-                            state.re_match_buffer.clear()
-                            state.label_prefix.clear()
-                        else:
-                            state.re_state = REState.EXPECT_TYPE_SEP_2
-                    else:
-                        state.span_tokens.append(token_id)
-                else:
-                    if token_id in {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}:
-                        state.re_match_buffer = [token_id]
-                        state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
-                    else:
-                        state.span_tokens.append(token_id)
-
-            elif state.re_state == REState.EXPECT_TYPE_SEP_2:
-                if token_id == self.re_type_sep_seq[len(state.re_match_buffer)]:
-                    state.re_match_buffer.append(token_id)
-                    if len(state.re_match_buffer) == len(self.re_type_sep_seq):
-                        state.re_state = REState.TAIL_TYPE_LABEL
-                        state.re_match_buffer.clear()
-                        state.label_prefix.clear()
-
-            elif state.re_state == REState.TAIL_TYPE_LABEL:
-                if token_id in {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}:
-                    state.re_match_buffer = [token_id]
-                    state.re_state = REState.EXPECT_TRIPLET_END_OR_NEXT
-                else:
-                    state.label_prefix.append(token_id)
-
-            elif state.re_state == REState.EXPECT_TRIPLET_END_OR_NEXT:
-                state.re_match_buffer.append(token_id)
-                if state.re_match_buffer == self.re_triplet_end_seq:
-                    state.re_state = REState.EXPECT_EOS
-                    state.re_match_buffer.clear()
-                elif state.re_match_buffer == self.re_next_triplet_start_seq:
-                    state.re_state = REState.HEAD_SPAN
-                    state.re_match_buffer.clear()
+            elif state.fsm_state == FSMState.REL_LABEL:
+                if token_id == self.tail_id:
+                    state.fsm_state = FSMState.TAIL_SPAN
                     state.span_tokens.clear()
-
-            elif state.re_state == REState.EXPECT_EOS:
-                pass
+                else:
+                    state.label_prefix.append(token_id)
+            elif state.fsm_state == FSMState.TAIL_SPAN:
+                if task == "re" and token_id == self.type_id:
+                    state.fsm_state = FSMState.TAIL_TYPE_LABEL
+                    state.label_prefix.clear()
+                elif task == "boundary_re" and token_id == self.head_id:
+                    state.fsm_state = FSMState.NEST
+                    state.span_tokens.clear()
+                    state.label_prefix.clear()
+                elif token_id in self.missing_start_ids or token_id == self.eos_id:
+                    state.fsm_state = FSMState.END
+                else:
+                    state.span_tokens.append(token_id)
+            elif state.fsm_state == FSMState.TAIL_TYPE_LABEL:
+                if token_id == self.head_id:
+                    state.fsm_state = FSMState.NEST
+                    state.span_tokens.clear()
+                    state.label_prefix.clear()
+                elif token_id in self.missing_start_ids or token_id == self.eos_id:
+                    state.fsm_state = FSMState.END
+                else:
+                    state.label_prefix.append(token_id)
+            elif state.fsm_state == FSMState.START:
+                if token_id == self.head_id:
+                    state.fsm_state = FSMState.NEST
+                    state.span_tokens.clear()
+                    state.label_prefix.clear()
+                elif token_id in self.missing_start_ids or token_id == self.eos_id:
+                    state.fsm_state = FSMState.END
             return
 
         if task in {"joint", "boundary_joint"}:
@@ -615,53 +568,36 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         task, b_idx = self._tasks[self._batch_idx(hyp_idx)], self._batch_idx(hyp_idx)
         
         if task in {"re", "boundary_re"}:
-            if state.re_state == REState.START:
-                return frozenset({self.re_prefix_seq[len(state.re_match_buffer)]})
+            if state.fsm_state == FSMState.START:
+                return frozenset({self.head_id, self.eos_id} | self.missing_start_ids)
                 
-            if state.re_state == REState.EXPECT_TRIPLET_START:
-                return frozenset({self.re_triplet_start_seq[len(state.re_match_buffer)]})
+            if state.fsm_state == FSMState.NEST:
+                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.nest_id})
                 
-            if state.re_state == REState.HEAD_SPAN:
-                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_element_sep_seq[0]}
+            if state.fsm_state == FSMState.INTER:
+                return frozenset({self.rel_id})
+                
+            if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
+                exits = {self.type_id} if task == "re" else {self.rel_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
-            if state.re_state == REState.EXPECT_TYPE_SEP:
-                return frozenset({self.re_type_sep_seq[len(state.re_match_buffer)]})
-                
-            if state.re_state == REState.TYPE_LABEL:
-                sentinels = {self.re_element_sep_seq[0]}
+            if state.fsm_state == FSMState.TYPE_LABEL:
+                sentinels = {self.rel_id}
                 return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
                 
-            if state.re_state == REState.EXPECT_ELEMENT_SEP_1:
-                return frozenset({self.re_element_sep_seq[len(state.re_match_buffer)]})
-                
-            if state.re_state == REState.REL_LABEL:
-                sentinels = {self.re_element_sep_seq[0]}
+            if state.fsm_state == FSMState.REL_LABEL:
+                sentinels = {self.tail_id}
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset(sentinels)
                 
-            if state.re_state == REState.EXPECT_ELEMENT_SEP_2:
-                return frozenset({self.re_element_sep_seq[len(state.re_match_buffer)]})
-                
-            if state.re_state == REState.TAIL_SPAN:
-                exits = {self.re_type_sep_seq[0]} if task == "re" else {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
+            if state.fsm_state == FSMState.TAIL_SPAN:
+                exits = {self.type_id} if task == "re" else ({self.head_id, self.eos_id} | self.missing_start_ids)
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
-            if state.re_state == REState.EXPECT_TYPE_SEP_2:
-                return frozenset({self.re_type_sep_seq[len(state.re_match_buffer)]})
-                
-            if state.re_state == REState.TAIL_TYPE_LABEL:
-                sentinels = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
+            if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
+                sentinels = {self.head_id, self.eos_id} | self.missing_start_ids
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
-            if state.re_state == REState.EXPECT_TRIPLET_END_OR_NEXT:
-                allowed = set()
-                if len(state.re_match_buffer) < len(self.re_triplet_end_seq):
-                    allowed.add(self.re_triplet_end_seq[len(state.re_match_buffer)])
-                if len(state.re_match_buffer) < len(self.re_next_triplet_start_seq):
-                    allowed.add(self.re_next_triplet_start_seq[len(state.re_match_buffer)])
-                return frozenset(allowed)
-                
-            if state.re_state == REState.EXPECT_EOS:
+            if state.fsm_state == FSMState.END:
                 return frozenset({self.eos_id})
                 
             return frozenset({self.eos_id, self.pad_id})
@@ -748,13 +684,30 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             prev_seq_tuple = tuple(seq[:-1])
             last_token = seq[-1]
             task = self._tasks[self._batch_idx(h)]
+            
+            is_active = True
+            if task in {"re", "boundary_re"}:
+                is_active = self._is_extract_active(seq)
+                
+            if not is_active:
+                new_cache[seq_tuple] = _HypState()
+                continue
+
             if prev_seq_tuple in self._state_cache:
                 state = self._state_cache[prev_seq_tuple].clone()
                 self._transition(state, last_token, task)
             else:
                 state = _HypState()
-                for token in seq:
-                    self._transition(state, token, task)
+                for idx in range(len(seq)):
+                    tok = seq[idx]
+                    sub_seq = seq[:idx+1]
+                    if task in {"re", "boundary_re"}:
+                        if self._is_extract_active(sub_seq):
+                            self._transition(state, tok, task)
+                        else:
+                            state.fsm_state = FSMState.START
+                    else:
+                        self._transition(state, tok, task)
                     
             new_cache[seq_tuple] = state
 

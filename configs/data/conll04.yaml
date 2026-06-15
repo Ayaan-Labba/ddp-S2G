@@ -9,3 +9,10 @@ relations:
   Located_In: is located in
   OrgBased_In: is based in
   Work_For: works for
+
+expanded_relations:
+  killed: killed
+  lives in: lives in
+  located in: is located in
+  organization based in: is based in
+  works for: works for
