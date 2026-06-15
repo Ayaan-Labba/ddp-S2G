@@ -100,7 +100,7 @@ def find_all_token_spans(source_tokens: List[str], span_text: str) -> List[Tuple
 
 
 def build_boundary_encoder_input(text: str, tok: AnyTokens = S2GTokens("boundary"), ssi_prompt: str = "ssi") -> str:
-    if ssi_prompt == "false":
+    if ssi_prompt in {False, "false", "False"}:
         return text
     elif ssi_prompt == "natural":
         return f"List all entities in the given text:  {text}"
@@ -117,7 +117,7 @@ def build_ner_encoder_input(
         types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
         prefix = f"List all entities of types [{', '.join(types)}] in the given text: "
         return f"{prefix}  {text}"
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         ssi = build_ner_ssi(entity_types, random_order, tok)
@@ -142,7 +142,7 @@ def build_re_encoder_input(
             f"3. Identify which of the allowed relation types were completely absent from the text.\n\n"
             f"Output:"
         )
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         ent_ssi = build_ner_ssi(entity_types, random_order, tok)
@@ -160,7 +160,7 @@ def build_pipeline_re_encoder_input(
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         prefix = f"List all relations of types [{', '.join(types)}] among the entities in the given text: "
         return f"{prefix}  {text}"
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         ssi = build_rel_ssi(rel_types, random_order, tok)
@@ -183,7 +183,7 @@ def build_boundary_re_encoder_input(
             f"3. Identify which of the allowed relation types were completely absent from the text.\n\n"
             f"Output:"
         )
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         ssi = build_rel_ssi(rel_types, random_order, tok)
@@ -195,7 +195,7 @@ def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_o
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         prefix = f"List all entities and all relations of types [{', '.join(types)}] in the given text: "
         return f"{prefix}  {text}"
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         return f"{build_rel_ssi(rel_types, random_order, tok)} {tok.text} {text}"
@@ -209,7 +209,7 @@ def build_joint_encoder_input(
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         prefix = f"List all entities of types [{', '.join(ent_types)}] and all relations of types [{', '.join(r_types)}] among them in the given text:"
         return f"{prefix}  {text}"
-    elif ssi_prompt == "false":
+    elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
         ent_ssi = build_ner_ssi(entity_types, random_order, tok)
