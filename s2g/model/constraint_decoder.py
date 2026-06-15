@@ -229,13 +229,13 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
         # Encode missing start token
         missing_start_ids = []
-        for pfx in ("[MISSING]", " [MISSING]", "[ MISSING]", " [ MISSING]"):
+        for pfx in ("MISSING:", " MISSING:", "MISSING :", " MISSING :"):
             missing_start_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
         self.missing_start_ids = frozenset(missing_start_ids)
 
         # Encode extract token
         extract_ids = []
-        for pfx in ("[EXTRACT]", " [EXTRACT]", "[ EXTRACT]", " [ EXTRACT]"):
+        for pfx in ("TRIPLETS:", " TRIPLETS:", "TRIPLETS :", " TRIPLETS :"):
             extract_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
         self.extract_ids = frozenset(extract_ids)
 
@@ -389,7 +389,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         if not seq:
             return False
         text = self.tokenizer.decode(seq)
-        return "[EXTRACT]" in text and "[MISSING]" not in text
+        return "TRIPLETS:" in text and "MISSING:" not in text
 
     def _source_copy_next(self, batch_idx: int, span_tokens: List[int]) -> FrozenSet[int]:
         equiv_map = self._equiv_maps[batch_idx]

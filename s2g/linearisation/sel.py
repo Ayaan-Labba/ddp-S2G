@@ -87,7 +87,7 @@ def build_sel(
             if not rels:
                 continue
 
-            # --- [ANALYSIS] ---
+            # --- SUMMARY ---
             head_text = ent['text']
             ent_analysis = []
             if task == "re":
@@ -110,7 +110,7 @@ def build_sel(
             ent_analysis.append(" ; ".join(rel_str_list))
             analysis_parts.append(" ".join(ent_analysis))
 
-            # --- [EXTRACT] ---
+            # --- TRIPLETS ---
             for i, rel in enumerate(rels):
                 if task == "re":
                     if i == 0 or not use_nesting:
@@ -133,10 +133,10 @@ def build_sel(
             missing_str = ""
 
         parts = []
-        parts.append(f"[ANALYSIS] {analysis_str}" if analysis_str else "[ANALYSIS]")
-        parts.append(f"[EXTRACT] {extract_str}" if extract_str else "[EXTRACT]")
+        parts.append(f"SUMMARY: {analysis_str}" if analysis_str else "SUMMARY:")
+        parts.append(f"TRIPLETS: {extract_str}" if extract_str else "TRIPLETS:")
         if use_rejection:
-            parts.append(f"[MISSING] {missing_str}" if missing_str else "[MISSING]")
+            parts.append(f"MISSING: {missing_str}" if missing_str else "MISSING:")
         return " ".join(parts)
 
     if task in {"joint", "boundary_joint"}:
@@ -350,11 +350,11 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         entity_dict: Dict[str, EntityBlock] = {}
         rejected: List[RejectedItem] = []
         
-        # Extract only the [EXTRACT] portion of the text
-        if "[EXTRACT]" in text:
-            extract_part = text.split("[EXTRACT]", 1)[1]
-            if "[MISSING]" in extract_part:
-                extract_part = extract_part.split("[MISSING]", 1)[0]
+        # Extract only the TRIPLETS: portion of the text
+        if "TRIPLETS:" in text:
+            extract_part = text.split("TRIPLETS:", 1)[1]
+            if "MISSING:" in extract_part:
+                extract_part = extract_part.split("MISSING:", 1)[0]
         else:
             extract_part = text
             
