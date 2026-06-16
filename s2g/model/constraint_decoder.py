@@ -149,7 +149,6 @@ class FSMState(Enum):
     END = auto()
     ENT_DECL_SPAN = auto()
     TRIPLET_HEAD_SPAN = auto()
-    GRAPH = auto()
     # New states for re/boundary_re
     TRIP_HEAD_SPAN = auto()
     TRIP_HTYPE = auto()
@@ -351,7 +350,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 ent_type_sentinel = {self.re_element_sep_seq[0]}
                 tail_type_sentinel = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
             else:
-                ent_type_sentinel = {self.rel_id} if task == "pipeline_re" else ({self.ent_start_id, self.graph_id, self.eos_id} if task == "joint" else ({self.sep_id} if task == "re" else self._get_inter_tokens(task)))
+                ent_type_sentinel = {self.rel_id} if task == "pipeline_re" else ({self.ent_start_id, self.head_id, self.null_id, self.eos_id} if task == "joint" else ({self.sep_id} if task == "re" else self._get_inter_tokens(task)))
                 tail_type_sentinel = {self.sep_id, self.trip_id, self.null_id, self.eos_id} if task == "re" else {self.nest_id, self.head_id, self.null_id, self.eos_id}
 
             if task in {"re", "boundary_re"}:
@@ -518,8 +517,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 pass  
             elif token_id == self.ent_start_id: 
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.ENT_DECL_SPAN, [], []
-            elif token_id == self.graph_id:
-                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.GRAPH, [], []
+
             elif token_id == self.head_id: 
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.TRIPLET_HEAD_SPAN, [], []
             elif token_id == self.type_id: 
@@ -612,18 +610,15 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             
         if task in {"joint", "boundary_joint"}:
             if state.fsm_state == FSMState.START: 
-                return frozenset({self.ent_start_id, self.graph_id, self.eos_id})
+                return frozenset({self.ent_start_id, self.head_id, self.null_id, self.eos_id})
             
             if state.fsm_state == FSMState.ENT_DECL_SPAN:
-                exits = {self.type_id} if task == "joint" else {self.ent_start_id, self.graph_id, self.eos_id}
+                exits = {self.type_id} if task == "joint" else {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.TYPE_LABEL:
-                sentinels = {self.ent_start_id, self.graph_id, self.eos_id}
+                sentinels = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
                 return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
-                
-            if state.fsm_state == FSMState.GRAPH:
-                return frozenset({self.head_id, self.null_id, self.eos_id})
 
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 exits = {self.rel_id}

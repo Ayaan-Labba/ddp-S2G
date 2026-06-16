@@ -150,8 +150,6 @@ def build_sel(
         if ent_parts:
             parts.append(" ".join(ent_parts))
 
-        parts.append(tok.graph)
-
         triplet_parts = []
         for ent in blocks:
             rels = list(ent["relations"]) if random_sel else ent["relations"]
@@ -337,10 +335,7 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
                 flush_current_state()
                 state = "IDLE"
                 i += 1
-            elif t == getattr(tok, "graph", None):
-                flush_current_state()
-                state = "IDLE"
-                i += 1
+
             elif t == tok.null:
                 flush_current_state()
                 state = "NULL"
