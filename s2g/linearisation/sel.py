@@ -51,10 +51,13 @@ def organize_by_entity(entities: List[Dict], relations: List[Dict]) -> List[Enti
     return entity_blocks
 
 
-def filter_entity_blocks(entity_blocks: List[EntityBlock], allowed_rel_types: Set[str]) -> List[EntityBlock]:
+def filter_entity_blocks(entity_blocks: List[EntityBlock], allowed_rel_types: Set[str], allowed_ent_types: Optional[Set[str]] = None) -> List[EntityBlock]:
     return [{
         **block,
-        "relations": [r for r in block["relations"] if r["type"] in allowed_rel_types]
+        "relations": [
+            r for r in block["relations"] 
+            if r["type"] in allowed_rel_types and (allowed_ent_types is None or r.get("tail_type") in allowed_ent_types)
+        ]
     } for block in entity_blocks]
 
 

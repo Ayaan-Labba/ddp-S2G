@@ -117,6 +117,7 @@ class HardwareConfig:
 @dataclass
 class EvaluationConfig:
     split: str = "test"
+    evaluate_config: Optional[str] = None
 
 @dataclass
 class S2GConfig:

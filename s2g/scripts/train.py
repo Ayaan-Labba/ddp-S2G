@@ -177,5 +177,33 @@ def main() -> None:
         with open(out_dir / "val_metrics.json", "w", encoding="utf-8") as f: 
             json.dump(val_metrics, f, indent=2)
 
+        if getattr(cfg.evaluation, "evaluate_config", None):
+            logger.info(f"Running post-training evaluation using config: {cfg.evaluation.evaluate_config}")
+            
+            # Explicitly free GPU memory to prevent OOM in the subprocess
+            del trainer
+            del model
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            
+            import subprocess
+            import sys
+            eval_cmd = [
+                sys.executable, "-m", "s2g.scripts.evaluate",
+                "--config", cfg.evaluation.evaluate_config,
+                f"model.pretrained_checkpoint={str(best_dir)}",
+                f"data.data_dir={cfg.data.data_dir}",
+                f"data.schema_file={cfg.data.schema_file}",
+                f"data.entity_schema_file={cfg.data.entity_schema_file}",
+                f"data.output_dir={str(out_dir / 'eval_test')}",
+                "evaluation.split=test"
+            ]
+            try:
+                subprocess.run(eval_cmd, check=True)
+                logger.info("Post-training evaluation completed successfully.")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Post-training evaluation failed with exit code {e.returncode}")
+
 if __name__ == "__main__":
     main()

@@ -129,7 +129,12 @@ class S2GCollator:
             enc = build_re_encoder_input(
                 pos_ent + neg_ent, pos_rel + neg_rel, inst["text"], random_order=self._random_prompt, tok=self._tok, ssi_prompt=self._ssi_prompt
             )
-            filtered_blocks = filter_entity_blocks(blocks, set(pos_rel))
+            allowed_ents = set(pos_ent)
+            filtered_blocks = filter_entity_blocks(
+                [b for b in blocks if b.get("type") in allowed_ents],
+                set(pos_rel),
+                allowed_ents
+            )
             return enc, build_sel(filtered_blocks, "re", self._tok, rejected_ent_types=neg_ent, rejected_rel_types=neg_rel, random_sel=self._random_sel, use_rejection=self._use_rejection, use_nesting=self._use_nesting, rel_map=self._rel_map)
 
     def _prepare_boundary_re(self, inst: Dict, blocks: List) -> Tuple[str, str]:
@@ -177,7 +182,8 @@ class S2GCollator:
         allowed_ents = set(pos_ent)
         filtered_blocks = filter_entity_blocks(
             [b for b in blocks if b.get("type") in allowed_ents],
-            set(pos_rel)
+            set(pos_rel),
+            allowed_ents
         )
         
         return enc, build_sel(
