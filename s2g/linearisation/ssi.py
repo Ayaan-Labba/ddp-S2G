@@ -4,37 +4,19 @@ SSI construction and text augmentation for the S2G encoder input.
 from __future__ import annotations
 
 import random
-from typing import List, Optional, Set, Tuple
+from typing import List, Tuple
 
 from .special_tokens import AnyTokens, S2GTokens
 
 
-def build_ent_ssi(entity_types: List[str], random_order: bool = False, tok: AnyTokens = S2GTokens("pipeline")) -> str:
+def build_ent_ssi(entity_types: List[str], random_order: bool = False, tok: AnyTokens = S2GTokens("joint")) -> str:
     types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
     return " ".join(f"{tok.ner} {t}" for t in types)
 
 
-def build_rel_ssi(rel_types: List[str], random_order: bool = False, tok: AnyTokens = S2GTokens("pipeline")) -> str:
+def build_rel_ssi(rel_types: List[str], random_order: bool = False, tok: AnyTokens = S2GTokens("joint")) -> str:
     types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
     return " ".join(f"{tok.re} {t}" for t in types)
-
-
-def find_token_span(source_tokens: List[str], span_text: str) -> Optional[Tuple[int, int]]:
-    span_words = span_text.split()
-    n = len(span_words)
-    if not n: 
-        return None
-        
-    first_word = span_words[0]
-    start_idx = 0
-    while True:
-        try:
-            i = source_tokens.index(first_word, start_idx)
-            if source_tokens[i : i + n] == span_words:
-                return i, i + n
-            start_idx = i + 1
-        except ValueError:
-            return None
 
 
 def find_all_token_spans(source_tokens: List[str], span_text: str) -> List[Tuple[int, int]]:

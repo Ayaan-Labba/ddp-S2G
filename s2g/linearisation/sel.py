@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import random
 import re
-from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .special_tokens import AnyTokens, S2GTokens
@@ -182,16 +181,6 @@ def build_sel(
         return " ".join(parts)
 
     return ""
-
-
-class _State(Enum):
-    IDLE = auto()
-    ENT_SPAN = auto()
-    TYPE_LABEL = auto()
-    REL_LABEL = auto()
-    TAIL_SPAN = auto()
-    TAIL_TYPE_LABEL = auto()
-    NULL_LABEL = auto()
 
 
 def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:

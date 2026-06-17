@@ -90,35 +90,13 @@ def main() -> None:
         "data_dir": cfg.data.data_dir,
     })
 
-    variant_to_callback_task = {
-        "pipeline": "re",
-        "boundary_pipeline": "boundary_re",
-        "joint": "joint",
-        "boundary_joint": "boundary_joint",
-        "boundary": "boundary",
-        "ner": "ner",
-        "re": "re",
-        "boundary_re": "boundary_re",
-    }
-    callback_task = variant_to_callback_task.get(cfg.model.model_variant, "re")
-
     callbacks = [
         StepTrackingCallback(collator), S2GEarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
         PeriodicCheckpointCallback(output_dir=cfg.data.output_dir, every_n_steps=cfg.checkpoint.every_n_steps, wandb_run_id=wandb.run.id if wandb.run else None),
-        GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, callback_task, cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
+        GenerateTextSamplesCallback(tokenizer, [val_dataset[i] for i in range(min(8, len(val_dataset)))], collator, cfg.model.model_variant, cfg.callbacks.sample_generation_interval, cfg.generation.num_beams, cfg.tokenization.max_target_length)
     ]
 
-    variant_to_best_metric = {
-        "pipeline": "strict_f1",
-        "joint": "strict_f1",
-        "re": "boundary_f1",
-        "ner": "ner_f1",
-        "boundary_pipeline": "boundary_f1",
-        "boundary_joint": "boundary_f1",
-        "boundary_re": "boundary_f1",
-        "boundary": "ner_boundary_f1",
-    }
-    best_metric = variant_to_best_metric.get(cfg.model.model_variant, "strict_f1")
+    best_metric = cfg.validation.early_stopping_metric
 
     trainer = S2GTrainer(
         scheduler_type=cfg.scheduler.type, model_variant=cfg.model.model_variant, tokens=tokens, entity_schema=entity_schema, rel_schema=rel_schema, train_eval_dataset=train_eval_dataset,

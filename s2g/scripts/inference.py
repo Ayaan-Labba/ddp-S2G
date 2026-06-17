@@ -114,7 +114,13 @@ def main() -> None:
     tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint)
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
-    model_variant = (Path(args.checkpoint) / "model_variant.txt").read_text(encoding="utf-8").strip() if (Path(args.checkpoint) / "model_variant.txt").exists() else "pipeline"
+    variant_file = Path(args.checkpoint) / "model_variant.txt"
+    if not variant_file.exists():
+        raise FileNotFoundError(
+            f"model_variant.txt not found in checkpoint '{args.checkpoint}'. "
+            f"Cannot determine the model variant for inference."
+        )
+    model_variant = variant_file.read_text(encoding="utf-8").strip()
     
     if (Path(args.checkpoint) / "tasks.json").exists():
         with open(Path(args.checkpoint) / "tasks.json", "r", encoding="utf-8") as f:

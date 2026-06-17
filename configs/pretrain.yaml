@@ -5,7 +5,7 @@
 # scripts/config_utils.py.  Override any nested field from the command line
 # using OmegaConf dotlist syntax (key=value, dotted for nested keys):
 #
-#   python -m s2g.scripts.pretrain --config configs/pretrain.yaml \
+#   python -m s2g.scripts.train --config configs/pretrain.yaml \
 #       optimizer.lr=3e-5 train.batch_size=8
 #
 # For W&B sweeps, the agent injects overrides automatically via
@@ -47,7 +47,7 @@ validation:
   train_eval_percent_check: 0.006     # Fraction of train set for periodic train metrics (null = disable)
   batch_size: 128                      # May exceed train batch size
   early_stopping_patience: 4          # In validation checks, not steps
-  early_stopping_metric: val_f1
+  early_stopping_metric: boundary_f1
 
 generation:                         
   num_beams: 1                      # Beam search at validation

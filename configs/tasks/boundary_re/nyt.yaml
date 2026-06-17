@@ -5,7 +5,7 @@
 model:
   name: google/flan-t5-large
   pretrained_checkpoint: null
-  model_variant: pipeline
+  model_variant: boundary_re
 
 tokenization:
   max_source_length: 512
@@ -38,7 +38,7 @@ validation:
   train_eval_percent_check: 0.09
   batch_size: 64
   early_stopping_patience: 4
-  early_stopping_metric: strict_f1
+  early_stopping_metric: boundary_f1
 
 generation:
   num_beams: 1

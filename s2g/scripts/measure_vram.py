@@ -14,27 +14,16 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer, VARIANT_TO_TASKS
 from s2g.scripts.config_utils import load_config
 
 logger = logging.getLogger(__name__)
 
-# Tasks exercised per model variant — must match compute_loss and _run_generation
-_TRAIN_TASK_KEYS: Dict[str, Tuple[str, ...]] = {
-    "boundary": ("boundary",),
-    "ner": ("ner",),
-    "re": ("re",),
-    "boundary_re": ("boundary_re",),
-    "pipeline": ("ner", "re"),
-    "boundary_pipeline": ("boundary", "boundary_re"),
-    "boundary_joint": ("boundary_joint",),
-    "joint": ("joint",),
-}
 
 def _mb(n_bytes: int) -> float:
     return n_bytes / 1024 ** 2
@@ -322,10 +311,10 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.ssi.warm)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.sel.warm_start)
     model.to(device)
 
-    task_keys = _TRAIN_TASK_KEYS[cfg.model.model_variant]
+    task_keys = tuple(VARIANT_TO_TASKS[cfg.model.model_variant])
     pad_id    = tokenizer.pad_token_id
     max_src   = cfg.tokenization.max_source_length
     max_tgt   = cfg.tokenization.max_target_length

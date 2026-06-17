@@ -62,7 +62,7 @@ def _extract_ssi_labels(
         curr.clear()
 
     for token_id in source_row:
-        elif token_id in {pad_id, eos_id, text_id}:
+        if token_id in {pad_id, eos_id, text_id}:
             flush()
             break
         elif ner_id is not None and token_id == ner_id:
@@ -95,42 +95,14 @@ def _extract_ssi_labels(
 
 class FSMState(Enum):
     START = auto()
-    ENT_SPAN = auto()
     TYPE_LABEL = auto()
     REL_LABEL = auto()
     TAIL_SPAN = auto()
     TAIL_TYPE_LABEL = auto()
-    NEST = auto()
-    INTER = auto()
     NULL_LABEL = auto()
     END = auto()
     ENT_DECL_SPAN = auto()
     TRIPLET_HEAD_SPAN = auto()
-    # New states for re/boundary_re
-    TRIP_HEAD_SPAN = auto()
-    TRIP_HTYPE = auto()
-    TRIP_REL = auto()
-    TRIP_TAIL_SPAN = auto()
-    TRIP_TTYPE = auto()
-    TRIP_AND_EXPECTED = auto()
-    TRIP_NULL = auto()
-
-
-class REState(Enum):
-    START = auto()
-    EXPECT_TRIPLET_START = auto()
-    HEAD_SPAN = auto()
-    EXPECT_TYPE_SEP = auto()
-    TYPE_LABEL = auto()
-    EXPECT_ELEMENT_SEP_1 = auto()
-    REL_LABEL = auto()
-    EXPECT_ELEMENT_SEP_2 = auto()
-    TAIL_SPAN = auto()
-    EXPECT_TYPE_SEP_2 = auto()
-    TAIL_TYPE_LABEL = auto()
-    EXPECT_TRIPLET_END_OR_NEXT = auto()
-    EXPECT_EOS = auto()
-    END = auto()
 
 
 @dataclass
@@ -138,17 +110,13 @@ class _HypState:
     fsm_state: FSMState = FSMState.START
     span_tokens: List[int] = field(default_factory=list)
     label_prefix: List[int] = field(default_factory=list)
-    re_state: REState = REState.START
-    re_match_buffer: List[int] = field(default_factory=list)
-    
+
     def clone(self) -> '_HypState':
         """Deep copy for state transition caching."""
         return _HypState(
-            self.fsm_state, 
-            self.span_tokens.copy(), 
-            self.label_prefix.copy(), 
-            self.re_state, 
-            self.re_match_buffer.copy()
+            self.fsm_state,
+            self.span_tokens.copy(),
+            self.label_prefix.copy(),
         )
 
 
@@ -162,39 +130,26 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         self.tokenizer = tokenizer
 
         tid = get_token_ids(tokenizer, tokens)
-        self.ent_start_id, self.ent_end_id = tid.get("ent_start"), tid.get("ent_end")
+        self.ent_start_id = tid.get("ent_start")
         self.type_id, self.rel_id, self.tail_id, self.null_id = tid.get("type_"), tid.get("rel"), tid.get("tail"), tid.get("null")
-        self.head_id, self.nest_id, self.graph_id = tid.get("head"), tid.get("nest"), tid.get("graph")
-        self.trip_id, self.sep_id = tid.get("trip"), tid.get("sep")
+        self.head_id, self.nest_id = tid.get("head"), tid.get("nest")
         self.eos_id, self.pad_id = tokenizer.eos_token_id, tokenizer.pad_token_id or 0
 
-        self.and_tokens = frozenset(tokenizer.encode(" and", add_special_tokens=False) + tokenizer.encode("and", add_special_tokens=False))
-
-        # Encode structural markers
+        # Encode structural markers used as trie sentinels for the "re" format.
         def get_suffix_ids(suffix: str) -> List[int]:
             a_ids = tokenizer.encode("a", add_special_tokens=False)
             full_ids = tokenizer.encode("a" + suffix, add_special_tokens=False)
             return full_ids[len(a_ids):]
 
-        self.re_prefix_seq = tokenizer.encode("Relations: [", add_special_tokens=False)
-        self.re_triplet_start_seq = get_suffix_ids("(")
-        
-        self.re_type_sep_seq = get_suffix_ids(":")
         self.re_element_sep_seq = get_suffix_ids(", ")
         self.re_triplet_end_seq = get_suffix_ids(")]")
         self.re_next_triplet_start_seq = get_suffix_ids("), (")
 
-        # Encode missing start token
+        # Encode the "MISSING:" prefix that ends the TRIPLETS section.
         missing_start_ids = []
         for pfx in ("MISSING:", " MISSING:", "MISSING :", " MISSING :"):
             missing_start_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
         self.missing_start_ids = frozenset(missing_start_ids)
-
-        # Encode extract token
-        extract_ids = []
-        for pfx in ("TRIPLETS:", " TRIPLETS:", "TRIPLETS :", " TRIPLETS :"):
-            extract_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
-        self.extract_ids = frozenset(extract_ids)
 
         self._special_ids = frozenset(v for v in tid.values() if v is not None) | {self.eos_id, self.pad_id}
 
@@ -287,28 +242,30 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                         logger.warning("FSM: Failed to load entity_schema from %s: %s", entity_schema_file, e)
 
             # If e_seqs is empty and entity_schema is available, tokenize the schema
-            if not e_seqs and entity_schema and task in {"ner", "joint", "re"}:
+            if not e_seqs and entity_schema and task in {"joint", "re"}:
                 if task == "re":
                     e_seqs = [tokenizer.encode("a" + t, add_special_tokens=False)[len(a_ids):] for t in entity_schema]
                 else:
                     e_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in entity_schema]
-                
+
             # If r_seqs is empty and rel_schema is available, tokenize the schema
-            if not r_seqs and rel_schema and task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
+            if not r_seqs and rel_schema and task in {"re", "boundary_re", "boundary_joint", "joint"}:
                 if task in {"re", "boundary_re"}:
                     r_seqs = [tokenizer.encode(" " + t, add_special_tokens=False) for t in rel_schema]
                 else:
                     r_seqs = [tokenizer.encode(t, add_special_tokens=False) for t in rel_schema]
 
             self._tasks.append(task)
-            
-            # Setup sentinels for tries based on format
+
+            # Setup sentinels for tries based on format.  Entity/tail-type tries are
+            # only built for "re" and "joint" (see below), so the non-"re" branch
+            # here always corresponds to "joint".
             if task == "re":
                 ent_type_sentinel = {self.re_element_sep_seq[0]}
                 tail_type_sentinel = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
             else:
-                ent_type_sentinel = {self.rel_id} if task == "pipeline_re" else ({self.ent_start_id, self.head_id, self.null_id, self.eos_id} if task == "joint" else ({self.sep_id} if task == "re" else self._get_inter_tokens(task)))
-                tail_type_sentinel = {self.sep_id, self.trip_id, self.null_id, self.eos_id} if task == "re" else {self.nest_id, self.head_id, self.null_id, self.eos_id}
+                ent_type_sentinel = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
+                tail_type_sentinel = {self.nest_id, self.head_id, self.null_id, self.eos_id}
 
             if task in {"re", "boundary_re"}:
                 rel_sentinel = {self.re_element_sep_seq[0]}
@@ -316,14 +273,12 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 rel_sentinel = {self.tail_id}
 
             self._ent_type_tries.append(
-                Trie(e_seqs, ent_type_sentinel)
-                if task in {"ner", "joint", "re", "pipeline_re"} else None
+                Trie(e_seqs, ent_type_sentinel) if task in {"joint", "re"} else None
             )
             self._tail_type_tries.append(
-                Trie(e_seqs, tail_type_sentinel)
-                if task in {"joint", "re", "pipeline_re"} else None
+                Trie(e_seqs, tail_type_sentinel) if task in {"joint", "re"} else None
             )
-            self._rel_tries.append(Trie(r_seqs, rel_sentinel) if task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else None)
+            self._rel_tries.append(Trie(r_seqs, rel_sentinel) if task in {"re", "boundary_re", "boundary_joint", "joint"} else None)
             
             null_map = {
                 "boundary_joint": (r_seqs, {self.null_id, self.eos_id}), 
@@ -342,11 +297,12 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _is_extract_active(self, seq: List[int], task: str) -> bool:
         if not seq:
             return False
-        text = self.tokenizer.decode(seq)
+        # "re" / "boundary_re" emit a free-text SUMMARY before the structured
+        # TRIPLETS section; the FSM only constrains the TRIPLETS span.
         if task in {"re", "boundary_re"}:
+            text = self.tokenizer.decode(seq)
             return "TRIPLETS:" in text and "MISSING:" not in text
-        if task in {"joint", "boundary_joint"}:
-            return True
+        # joint / boundary_joint: structured output starts immediately.
         return True
 
     def _source_copy_next(self, batch_idx: int, span_tokens: List[int]) -> FrozenSet[int]:
@@ -380,18 +336,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                         valid_next.update(equiv_map.get(next_t, {next_t}))
                         
         return frozenset(valid_next)
-
-    def _get_inter_tokens(self, task: str) -> Set[int]:
-        if task in {"re", "boundary_re", "boundary_joint", "joint"}:
-            return {self.head_id, self.null_id, self.eos_id}
-        return {self.ent_start_id, self.null_id, self.eos_id}
-
-    def _ent_span_exits(self, task: str) -> FrozenSet[int]:
-        if task in {"boundary_joint", "boundary_re"}:
-            return frozenset({self.rel_id} | self._get_inter_tokens(task))
-        if task in {"joint", "re"}:
-            return frozenset({self.type_id})
-        return frozenset()
 
     def _transition(self, state: _HypState, token_id: int, task: str) -> None:
         if task in {"re", "boundary_re"}:
@@ -469,37 +413,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             else:
                 if state.fsm_state in {FSMState.ENT_DECL_SPAN, FSMState.TRIPLET_HEAD_SPAN, FSMState.TAIL_SPAN}: 
                     state.span_tokens.append(token_id)
-                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}: 
+                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}:
                     state.label_prefix.append(token_id)
             return
-
-        if token_id == self.eos_id: 
-            state.fsm_state = FSMState.END
-        elif token_id == self.pad_id and state.fsm_state == FSMState.START:
-            pass  
-        elif token_id in {self.ent_start_id, self.head_id}: 
-            state.fsm_state, state.span_tokens, state.label_prefix = FSMState.ENT_SPAN, [], []
-        elif token_id == self.ent_end_id: 
-            state.fsm_state, state.span_tokens, state.label_prefix = FSMState.INTER, [], []
-        elif token_id == self.tail_id: 
-            state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
-        elif token_id == self.null_id: 
-            state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
-        elif token_id == self.nest_id:
-            state.fsm_state = FSMState.NEST
-        elif token_id in {self.type_id, self.rel_id}:
-            if state.fsm_state != FSMState.NULL_LABEL: 
-                if token_id == self.type_id:
-                    state.fsm_state = FSMState.TAIL_TYPE_LABEL if state.fsm_state == FSMState.TAIL_SPAN else FSMState.TYPE_LABEL
-                else:
-                    state.fsm_state = FSMState.REL_LABEL
-                if token_id == self.rel_id: 
-                    state.span_tokens = []
-            state.label_prefix = []
-        elif state.fsm_state in {FSMState.ENT_SPAN, FSMState.TAIL_SPAN}: 
-            state.span_tokens.append(token_id)
-        elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.TAIL_TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}: 
-            state.label_prefix.append(token_id)
 
     def _allowed_tokens(self, state: _HypState, hyp_idx: int) -> FrozenSet[int]:
         task, b_idx = self._tasks[self._batch_idx(hyp_idx)], self._batch_idx(hyp_idx)
@@ -558,45 +474,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 
             if state.fsm_state == FSMState.NULL_LABEL:
                 return self._null_tries[b_idx].get_valid_next(state.label_prefix)
-                
+
             return frozenset({self.eos_id, self.pad_id})
 
-        if state.fsm_state == FSMState.START: 
-            if task in {"re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
-                return frozenset({self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
-            return frozenset({self.ent_start_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
-            
-        if state.fsm_state == FSMState.ENT_SPAN: 
-            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | self._ent_span_exits(task)) or frozenset({self.eos_id})
-            
-        if state.fsm_state == FSMState.TAIL_SPAN:
-            exits = set()
-            if task in {"joint", "re", "pipeline_re"}:
-                exits.add(self.type_id)
-            elif task in {"boundary_re", "boundary_joint", "pipeline_boundary_re"}:
-                exits.update({self.nest_id, self.head_id, self.null_id, self.eos_id})
-            return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
-            
-        if state.fsm_state == FSMState.TYPE_LABEL: 
-            return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(self._get_inter_tokens(task))
-            
-        if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
-            return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset({self.nest_id, self.head_id, self.null_id, self.eos_id})
-
-        if state.fsm_state == FSMState.REL_LABEL: 
-            return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
-            
-        if state.fsm_state == FSMState.NEST:
-            return frozenset({self.rel_id})
-
-        if state.fsm_state == FSMState.NULL_LABEL: 
-            return self._null_tries[b_idx].get_valid_next(state.label_prefix)
-            
-        if state.fsm_state == FSMState.INTER: 
-            if task in {"re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
-                return frozenset({self.head_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
-            return frozenset({self.ent_start_id, self.eos_id} | ({self.null_id} if task != "boundary" else set()))
-        
         return frozenset({self.eos_id, self.pad_id})
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
@@ -637,10 +517,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
             self._disallowed.fill_(True)
             valid_tokens = [t for t in self._allowed_tokens(state, h) if t < vocab_size]
-            if state.fsm_state == FSMState.TRIP_NULL:
-                # Don't mask anything during natural language rejection
-                self._disallowed.fill_(False)
-            elif valid_tokens:
+            if valid_tokens:
                 self._disallowed[valid_tokens] = False
                 
             scores[h].masked_fill_(self._disallowed, float("-inf"))
@@ -652,7 +529,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
 def build_constraint_processor(
         tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-        tokens: AnyTokens = S2GTokens("pipeline"), num_beams: int = 1,
+        tokens: AnyTokens = S2GTokens("joint"), num_beams: int = 1,
         entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
     ) -> ConstraintDecodingProcessor:
     return ConstraintDecodingProcessor(tokenizer=tokenizer, source_ids=source_ids, tokens=tokens, num_beams=num_beams, entity_schema=entity_schema, rel_schema=rel_schema)

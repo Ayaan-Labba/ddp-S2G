@@ -17,12 +17,10 @@ from s2g.linearisation import S2GTokens, AnyTokens, extract_triplets, parse_sel
 logger = logging.getLogger(__name__)
 
 _TASK_TO_KEY = {
-    "boundary": "boundary",
-    "ner": "ner",
     "re": "re",
     "boundary_re": "boundary_re",
     "boundary_joint": "boundary_joint",
-    "joint": "joint"
+    "joint": "joint",
 }
 
 
@@ -121,7 +119,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         rows = []
         
         cols = ["Source", "Encoder Input"]
-        if self._task in {"ner", "joint", "boundary_joint", "boundary"}:
+        if self._task in {"joint", "boundary_joint"}:
             cols.extend(["Predicted Entities", "Gold Entities"])
         if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
             cols.extend(["Predicted Triplets", "Gold Triplets"])
@@ -142,15 +140,12 @@ class GenerateTextSamplesCallback(TrainerCallback):
 
             row = [inst["text"], prompts[i]]
             
-            if self._task in {"ner", "joint", "boundary_joint"}:
+            if self._task in {"joint", "boundary_joint"}:
                 p_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in p_ent]) if p_ent else "(none)"
                 g_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in g_ent]) if g_ent else "(none)"
                 row.extend([p_e, g_e])
-            elif self._task == "boundary":
-                p_e = "\n".join([e['text'] for e in p_ent]) if p_ent else "(none)"
-                g_e = "\n".join([e['text'] for e in g_ent]) if g_ent else "(none)"
-                row.extend([p_e, g_e])
-                
+
+
             if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
                 p_triplets = extract_triplets(p_ent, include_types=(self._task == "re"))
                 g_triplets = extract_triplets(g_ent, include_types=(self._task == "re"))

@@ -46,7 +46,7 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
         "head": entities[int(r["head"])],
         "tail": entities[int(r["tail"])],
         "type": relation_map.get(r["type"], r["type"])
-    } for r in raw.get("relations", []) if int(r["head"]) < len(entities) and int(r["tail"]) < len(entities)]
+    } for r in raw.get("relations", []) if 0 <= int(r["head"]) < len(entities) and 0 <= int(r["tail"]) < len(entities)]
 
     return {
         "text": " ".join(tokens), "tokens": tokens, "entities": entities, "relations": relations,

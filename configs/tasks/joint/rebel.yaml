@@ -47,7 +47,7 @@ validation:
   train_eval_percent_check: 0.006     # Fraction of train set for periodic train metrics (null = disable)
   batch_size: 128                      # May exceed train batch size
   early_stopping_patience: 4          # In validation checks, not steps
-  early_stopping_metric: val_f1
+  early_stopping_metric: boundary_f1
 
 generation:                         
   num_beams: 1                      # Beam search at validation

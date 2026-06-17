@@ -13,8 +13,6 @@ from typing import Dict, List, Tuple, Set
 
 import yaml
 
-from s2g.linearisation import build_sel, organize_by_entity
-
 logger = logging.getLogger(__name__)
 
 
@@ -75,19 +73,13 @@ def convert_instance(raw: Dict, entity_map: Dict[str, str], relation_map: Dict[s
     # entities may be empty for relation-free rows — that is intentional (mirrors REBEL)
     entities = sorted(entities_registry.values(), key=lambda e: e["offset"])
 
-    types = sorted({r["type"] for r in relations})
-    entity_blocks = organize_by_entity(entities, relations)
-    sel = build_sel(entity_blocks, "joint")
-
     return {
         "text": text,
         "tokens": tokens,
         "entities": entities,
         "relations": relations,
         "entity_types": sorted({e["type"] for e in entities}),
-        "rel_types": types,
-        "types": types,
-        "sel": sel,
+        "rel_types": sorted({r["type"] for r in relations}),
     }
 
 

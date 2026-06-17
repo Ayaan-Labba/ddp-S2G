@@ -11,9 +11,8 @@ import torch
 # All attribute names that carry a token string, in a stable order.
 _ALL_ATTR_NAMES: List[str] = [
     "ner", "re", "type_", "rel",
-    "ent_start", "ent_end", "tail", "null",
-    "head", "nest", "text", "trip", "sep",
-    "graph",
+    "ent_start", "tail", "null",
+    "head", "nest", "text",
 ]
 
 
@@ -27,15 +26,11 @@ class S2GTokens:
         self.type_     = "<type>"
         self.rel       = "<rel>"
         self.ent_start = "<ent>"
-        self.ent_end   = "</ent>"
         self.tail      = "<tail>"
         self.null      = "<null>"
         self.head      = "<head>"
         self.nest      = "<nest>"
         self.text      = "<text>"
-        self.trip      = "<trip>"
-        self.sep       = "<sep>"
-        self.graph     = "<graph>"
 
         active_map = {
             "re":                {"re", "text", "type_", "head", "rel", "tail", "nest"},
@@ -47,18 +42,8 @@ class S2GTokens:
         self._active.add("null")
 
     @property
-    def task_delimiters(self) -> List[str]:
-        delims = []
-        if "text" in self._active:
-            delims.append(self.text)
-        return delims
-
-    @property
     def all_tokens(self) -> List[str]:
         return [getattr(self, attr) for attr in _ALL_ATTR_NAMES if attr in self._active]
-
-    def as_dict(self) -> Dict[str, str]:
-        return {attr: getattr(self, attr) for attr in _ALL_ATTR_NAMES}
 
 
 AnyTokens = S2GTokens
@@ -95,8 +80,6 @@ def add_special_tokens_to_tokenizer(
             # Fix: build a reverse mapping {token_string → attr_name} and check the
             # attr_name against tokens._active instead.
             token_map = {
-                tokens.trip:      ".",
-                tokens.sep:       ":",
                 tokens.head:      "subject: ",
                 tokens.tail:      "object: ",
                 tokens.rel:       "relation: ",
@@ -106,9 +89,7 @@ def add_special_tokens_to_tokenizer(
                 tokens.text:      "in the text: ",
                 tokens.nest:      "the same subject",
                 tokens.ent_start: "entity: ",
-                tokens.ent_end:   "entity span end",
                 tokens.null:      "not found: ",
-                tokens.graph:     "relations: ",
             }
 
             # Reverse map: token string → attribute name

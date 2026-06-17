@@ -16,7 +16,7 @@
 #     tokenization.max_source_length=512  tokenization.max_target_length=256
 #
 # Run with:
-#   python -m s2g.scripts.finetune --config configs/finetune.yaml \
+#   python -m s2g.scripts.train --config configs/finetune.yaml \
 #       model.pretrained_checkpoint=outputs/pretrain/best_model \
 #       data.data_dir=data/conll04 \
 #       data.schema_file=data/conll04/relation.schema \
@@ -27,7 +27,7 @@
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null       # Set to pre-trained checkpoint path
-  model_variant: pipeline           # "pipeline" | "joint"
+  model_variant: joint              # "re" | "boundary_re" | "joint" | "boundary_joint"
 
 tokenization:
   max_source_length: 300
@@ -60,7 +60,7 @@ validation:
   train_eval_percent_check: 0.05    # 5% train subsample for train/val gap monitoring
   batch_size: 32
   early_stopping_patience: 10
-  early_stopping_metric: boundary_f1   # For pipeline model; use joint_rel_boundary_f1 for joint
+  early_stopping_metric: boundary_f1   # boundary_f1 (all variants) | strict_f1 (re/joint, includes types)
 
 generation:
   num_beams: 4

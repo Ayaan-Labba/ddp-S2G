@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class ModelConfig:
     name: str = "google/flan-t5-base"
     pretrained_checkpoint: Optional[str] = None
-    model_variant: str = "pipeline"
+    model_variant: str = "joint"
 
 @dataclass
 class TokenizationConfig:
@@ -71,7 +71,6 @@ class SSIConfig:
     mode: str = "budget"
     max_ent_types: Optional[int] = None
     max_rel_types: Optional[int] = None
-    max_steps: int = 150_000
     positive_rate_start: float = 0.9
     positive_rate_end: float = 0.9
     negative_rate_start: float = 0.1
