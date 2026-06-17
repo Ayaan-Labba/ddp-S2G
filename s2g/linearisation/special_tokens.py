@@ -10,7 +10,7 @@ import torch
 
 # All attribute names that carry a token string, in a stable order.
 _ALL_ATTR_NAMES: List[str] = [
-    "bound", "ner", "re", "type_", "rel",
+    "ner", "re", "type_", "rel",
     "ent_start", "ent_end", "tail", "null",
     "head", "nest", "text", "trip", "sep",
     "graph",
@@ -22,7 +22,6 @@ class S2GTokens:
         self.variant = variant
         self.use_rejection = use_rejection
 
-        self.bound     = "<bound>"
         self.ner       = "<ner>"
         self.re        = "<re>"
         self.type_     = "<type>"
@@ -39,24 +38,17 @@ class S2GTokens:
         self.graph     = "<graph>"
 
         active_map = {
-            "boundary":          {"bound", "ent_start", "ent_end"},
-            "ner":               {"ner", "text", "ent_start", "ent_end", "type_"},
             "re":                {"re", "text", "type_", "head", "rel", "tail", "nest"},
             "boundary_re":       {"re", "text", "head", "rel", "tail", "nest"},
-            "pipeline":          {"bound", "ner", "re", "text", "ent_start", "ent_end", "type_", "head", "rel", "tail", "nest"},
-            "boundary_pipeline": {"bound", "re", "text", "ent_start", "ent_end", "head", "rel", "tail", "nest"},
             "boundary_joint":    {"re", "text", "head", "rel", "tail", "nest", "ent_start"},
             "joint":             {"ner", "re", "text", "head", "type_", "rel", "tail", "nest", "ent_start"},
         }
-        self._active = set(active_map.get(variant, active_map["pipeline"]))
-        if use_rejection or variant != "boundary":
-            self._active.add("null")
+        self._active = set(active_map.get(variant, active_map["joint"]))
+        self._active.add("null")
 
     @property
     def task_delimiters(self) -> List[str]:
         delims = []
-        if "bound" in self._active:
-            delims.append(self.bound)
         if "text" in self._active:
             delims.append(self.text)
         return delims
@@ -72,12 +64,8 @@ class S2GTokens:
 AnyTokens = S2GTokens
 
 VARIANT_TO_TASKS: Dict[str, List[str]] = {
-    "boundary":          ["boundary"],
-    "ner":               ["ner"],
     "re":                ["re"],
     "boundary_re":       ["boundary_re"],
-    "pipeline":          ["ner", "re"],
-    "boundary_pipeline": ["boundary", "boundary_re"],
     "boundary_joint":    ["boundary_joint"],
     "joint":             ["joint"],
 }
@@ -115,7 +103,6 @@ def add_special_tokens_to_tokenizer(
                 tokens.type_:     "type: ",
                 tokens.ner:       "find type: ",
                 tokens.re:        "find relation: ",
-                tokens.bound:     "boundary",
                 tokens.text:      "in the text: ",
                 tokens.nest:      "the same subject",
                 tokens.ent_start: "entity: ",

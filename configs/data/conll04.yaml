@@ -16,3 +16,8 @@ expanded_relations:
   located in: is located in
   organization based in: is based in
   works for: works for
+
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

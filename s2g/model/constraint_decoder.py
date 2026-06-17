@@ -52,9 +52,6 @@ def _extract_ssi_labels(
     curr_kind = None
     seen_ner = False
     seen_re = False
-    seen_bound = False
-
-    bound_id = tid.get("bound")
     ner_id = tid.get("ner")
     re_id = tid.get("re")
     text_id = tid.get("text")
@@ -65,11 +62,7 @@ def _extract_ssi_labels(
         curr.clear()
 
     for token_id in source_row:
-        if token_id in {pad_id, eos_id, text_id}:
-            flush()
-            break
-        elif bound_id is not None and token_id == bound_id:
-            seen_bound = True
+        elif token_id in {pad_id, eos_id, text_id}:
             flush()
             break
         elif ner_id is not None and token_id == ner_id:
@@ -85,53 +78,17 @@ def _extract_ssi_labels(
 
     task = None
     variant = tokens.variant
-    if seen_bound:
-        task = "boundary"
-    elif seen_ner and seen_re:
-        task = "joint" if variant not in {"re", "pipeline"} else "re"
-    elif seen_ner:
-        task = "ner"
+    if seen_ner and seen_re:
+        task = "joint" if variant not in {"re"} else "re"
     elif seen_re:
-        if variant in {"re", "pipeline"}:
+        if variant in {"re"}:
             task = "re"
-        elif variant in {"boundary_re", "boundary_pipeline"}:
+        elif variant in {"boundary_re"}:
             task = "boundary_re"
         else:
             task = "boundary_joint"
     else:
-        # Fallback task determination when no SSI is present (natural or false)
-        if variant in {"joint", "boundary_joint", "ner", "re", "boundary", "boundary_re"}:
-            task = variant
-        elif variant == "pipeline":
-            # If <ent> is in source_row, it's RE task (from older behavior if any)
-            ent_start_id = tid.get("ent_start")
-            if ent_start_id is not None and ent_start_id in source_row:
-                task = "pipeline_re"
-            else:
-                try:
-                    dec_text = tokenizer.decode(source_row)
-                    if "relations of types" in dec_text or "among entities" in dec_text:
-                        task = "pipeline_re"
-                    else:
-                        task = "ner"
-                except Exception:
-                    task = "ner"
-        elif variant == "boundary_pipeline":
-            # If <ent> is in source_row, it's boundary_joint task
-            ent_start_id = tid.get("ent_start")
-            if ent_start_id is not None and ent_start_id in source_row:
-                task = "boundary_joint"
-            else:
-                try:
-                    dec_text = tokenizer.decode(source_row)
-                    if "relations of types" in dec_text or "among entities" in dec_text:
-                        task = "pipeline_boundary_re"
-                    else:
-                        task = "boundary"
-                except Exception:
-                    task = "boundary"
-        else:
-            task = "pipeline"
+        task = variant
 
     return task, ent_seqs, rel_seqs
 
@@ -369,11 +326,8 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             self._rel_tries.append(Trie(r_seqs, rel_sentinel) if task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else None)
             
             null_map = {
-                "ner": (e_seqs, {self.null_id, self.eos_id}), 
                 "boundary_joint": (r_seqs, {self.null_id, self.eos_id}), 
                 "joint": (e_seqs + r_seqs, {self.null_id, self.eos_id}),
-                "pipeline_re": (e_seqs + r_seqs, {self.null_id, self.eos_id}),
-                "pipeline_boundary_re": (r_seqs, {self.null_id, self.eos_id})
                 # re and boundary_re are handled openly after <null> without a Trie
             }
             n_seqs, n_sents = null_map.get(task, ([], {self.eos_id}))
@@ -428,37 +382,26 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         return frozenset(valid_next)
 
     def _get_inter_tokens(self, task: str) -> Set[int]:
-        if task == "boundary":
-            return {self.ent_start_id, self.eos_id}
-        if task in {"re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
+        if task in {"re", "boundary_re", "boundary_joint", "joint"}:
             return {self.head_id, self.null_id, self.eos_id}
         return {self.ent_start_id, self.null_id, self.eos_id}
 
     def _ent_span_exits(self, task: str) -> FrozenSet[int]:
-        if task == "boundary":
-            return frozenset(self._get_inter_tokens(task))
-        if task in {"boundary_joint", "boundary_re", "pipeline_boundary_re"}:
+        if task in {"boundary_joint", "boundary_re"}:
             return frozenset({self.rel_id} | self._get_inter_tokens(task))
-        if task in {"ner", "joint", "re", "pipeline_re"}:
+        if task in {"joint", "re"}:
             return frozenset({self.type_id})
         return frozenset()
 
     def _transition(self, state: _HypState, token_id: int, task: str) -> None:
         if task in {"re", "boundary_re"}:
             if token_id == self.head_id:
-                state.fsm_state = FSMState.NEST
+                state.fsm_state = FSMState.TRIPLET_HEAD_SPAN
                 state.span_tokens.clear()
                 state.label_prefix.clear()
-            elif state.fsm_state == FSMState.NEST:
-                if token_id == self.nest_id:
-                    state.fsm_state = FSMState.INTER
-                else:
-                    state.fsm_state = FSMState.TRIPLET_HEAD_SPAN
-                    state.span_tokens.append(token_id)
-            elif state.fsm_state == FSMState.INTER:
-                if token_id == self.rel_id:
-                    state.fsm_state = FSMState.REL_LABEL
-                    state.label_prefix.clear()
+            elif token_id == self.nest_id:
+                state.fsm_state = FSMState.REL_LABEL
+                state.label_prefix.clear()
             elif state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 if task == "re" and token_id == self.type_id:
                     state.fsm_state = FSMState.TYPE_LABEL
@@ -484,29 +427,17 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 if task == "re" and token_id == self.type_id:
                     state.fsm_state = FSMState.TAIL_TYPE_LABEL
                     state.label_prefix.clear()
-                elif task == "boundary_re" and token_id == self.head_id:
-                    state.fsm_state = FSMState.NEST
-                    state.span_tokens.clear()
-                    state.label_prefix.clear()
                 elif token_id in self.missing_start_ids or token_id == self.eos_id:
                     state.fsm_state = FSMState.END
                 else:
                     state.span_tokens.append(token_id)
             elif state.fsm_state == FSMState.TAIL_TYPE_LABEL:
-                if token_id == self.head_id:
-                    state.fsm_state = FSMState.NEST
-                    state.span_tokens.clear()
-                    state.label_prefix.clear()
-                elif token_id in self.missing_start_ids or token_id == self.eos_id:
+                if token_id in self.missing_start_ids or token_id == self.eos_id:
                     state.fsm_state = FSMState.END
                 else:
                     state.label_prefix.append(token_id)
             elif state.fsm_state == FSMState.START:
-                if token_id == self.head_id:
-                    state.fsm_state = FSMState.NEST
-                    state.span_tokens.clear()
-                    state.label_prefix.clear()
-                elif token_id in self.missing_start_ids or token_id == self.eos_id:
+                if token_id in self.missing_start_ids or token_id == self.eos_id:
                     state.fsm_state = FSMState.END
             return
 
@@ -532,7 +463,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             elif token_id == self.tail_id: 
                 state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
             elif token_id == self.nest_id:
-                state.fsm_state = FSMState.NEST
+                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
             elif token_id == self.null_id: 
                 state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
             else:
@@ -577,12 +508,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             if state.fsm_state == FSMState.START:
                 return frozenset({self.head_id, self.eos_id} | self.missing_start_ids)
                 
-            if state.fsm_state == FSMState.NEST:
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | {self.nest_id})
-                
-            if state.fsm_state == FSMState.INTER:
-                return frozenset({self.rel_id})
-                
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 exits = {self.type_id} if task == "re" else {self.rel_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
@@ -596,11 +521,11 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.type_id} if task == "re" else ({self.head_id, self.eos_id} | self.missing_start_ids)
+                exits = {self.type_id} if task == "re" else ({self.nest_id, self.head_id, self.eos_id} | self.missing_start_ids)
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
-                sentinels = {self.head_id, self.eos_id} | self.missing_start_ids
+                sentinels = {self.nest_id, self.head_id, self.eos_id} | self.missing_start_ids
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.END:
@@ -630,9 +555,6 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             if state.fsm_state == FSMState.TAIL_SPAN:
                 exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
-                
-            if state.fsm_state == FSMState.NEST:
-                return frozenset({self.rel_id})
                 
             if state.fsm_state == FSMState.NULL_LABEL:
                 return self._null_tries[b_idx].get_valid_next(state.label_prefix)

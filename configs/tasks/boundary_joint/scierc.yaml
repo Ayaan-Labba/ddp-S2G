@@ -48,11 +48,9 @@ generation:
   constraint_decoding: false
 
 ssi:
-  max_ent_types_in_prompt: null
-  max_rel_types_in_prompt: null
+  max_ent_types: null
+  max_rel_types: null
   random_prompt: false
-  random_sel: false
-  use_rejection: false
 
 checkpoint:
   save_top_k: 3
@@ -77,3 +75,7 @@ hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: null
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

@@ -64,7 +64,7 @@ def filter_entity_blocks(entity_blocks: List[EntityBlock], allowed_rel_types: Se
 def build_sel(
         entity_blocks: List[EntityBlock], 
         task: str, 
-        tok: AnyTokens = S2GTokens("pipeline"), 
+        tok: AnyTokens, 
         rejected_ent_types: Optional[List[str]] = None, 
         rejected_rel_types: Optional[List[str]] = None, 
         random_sel: bool = False,
@@ -72,7 +72,7 @@ def build_sel(
         use_nesting: bool = True,
         rel_map: Optional[Dict[str, str]] = None
     ) -> str:
-    if task not in {"boundary", "ner", "re", "boundary_re", "boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"}:
+    if task not in {"re", "boundary_re", "boundary_joint", "joint"}:
         raise ValueError(f"Unknown task {task!r}.")
     blocks = list(entity_blocks) if random_sel else entity_blocks
     if random_sel: 
@@ -119,12 +119,12 @@ def build_sel(
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, head_text, tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                     else:
-                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                 else:  # boundary_re
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, head_text, tok.rel, rel['type'], tok.tail, rel['tail']])
                     else:
-                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
 
         analysis_str = " . ".join(analysis_parts)
         extract_str = " ".join(extract_parts)
@@ -166,7 +166,7 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
-                    ent_triplet.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
         if triplet_parts:
@@ -175,53 +175,13 @@ def build_sel(
         if use_rejection:
             _append_null_block(
                 parts, tok, 
-                ent_types=(rejected_ent_types or []) if task in {"ner", "joint"} else [],
-                rel_types=(rejected_rel_types or []) if task in {"re", "boundary_re", "boundary_joint", "joint"} else [],
+                ent_types=(rejected_ent_types or []) if task == "joint" else [],
+                rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint"} else [],
                 random_sel=random_sel
             )
         return " ".join(parts)
 
-    parts = []
-    for ent in blocks:
-        rels = list(ent["relations"]) if random_sel else ent["relations"]
-        if random_sel: 
-            random.shuffle(rels)
-
-        if task == "boundary":
-            parts.extend([tok.ent_start, ent['text']])
-            continue
-        
-        if task in {"pipeline_re", "pipeline_boundary_re"} and not rels:
-            continue
-
-        if task in {"pipeline_re", "pipeline_boundary_re"}:
-            ent_parts = []
-            for i, rel in enumerate(rels):
-                if i == 0 or not use_nesting:
-                    ent_parts.extend([tok.head, ent['text']])
-                    if task == "pipeline_re":
-                        ent_parts.extend([tok.type_, ent.get('type') or ''])
-                    ent_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
-                    if task == "pipeline_re":
-                        ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
-                else:
-                    ent_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
-                    if task == "pipeline_re":
-                        ent_parts.extend([tok.type_, rel.get('tail_type') or ''])
-            parts.append(" ".join(ent_parts))
-        elif task == "ner":
-            ent_parts = [tok.ent_start, ent['text'], tok.type_, ent.get('type') or '']
-            parts.append(" ".join(ent_parts))
-
-    if task != "boundary" and use_rejection:
-        _append_null_block(
-            parts, tok, 
-            ent_types=(rejected_ent_types or []) if task in {"ner", "joint", "pipeline_re"} else [],
-            rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint", "pipeline_re", "pipeline_boundary_re"} else [],
-            random_sel=random_sel
-        )
-
-    return " ".join(parts)
+    return ""
 
 
 class _State(Enum):
@@ -234,7 +194,7 @@ class _State(Enum):
     NULL_LABEL = auto()
 
 
-def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[EntityBlock], List[RejectedItem]]:
+def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
     pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
     tokens = [t.strip() for t in pattern.split(text) if t.strip()]
@@ -331,9 +291,9 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
                 i += 1
             elif t == getattr(tok, "nest", None):
                 flush_current_state()
-                state = "IDLE"
+                state = "REL"
+                current_rel_parts.clear()
                 i += 1
-
             elif t == tok.null:
                 flush_current_state()
                 state = "NULL"
@@ -412,18 +372,14 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         while i < len(tokens):
             t = tokens[i]
             if t == tok.head:
-                if i + 1 < len(tokens) and tokens[i + 1] == getattr(tok, "nest", None):
-                    flush_triplet()
-                    state = "IDLE"
-                    i += 2
-                    continue
-                else:
-                    flush_triplet()
-                    current_head_text.clear()
-                    current_head_type.clear()
-                    state = "HEAD_TEXT"
-                    i += 1
-                    continue
+                flush_triplet()
+                current_head_text.clear()
+                current_head_type.clear()
+                state = "HEAD_TEXT"
+            elif t == getattr(tok, "nest", None):
+                flush_triplet()
+                state = "REL"
+                current_rel_type.clear()
             elif t == tok.type_:
                 if state == "HEAD_TEXT":
                     state = "HEAD_TYPE"
@@ -449,93 +405,7 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
         flush_triplet()
         return _deduplicate_entities(entities), rejected
 
-    state = _State.IDLE
-    curr_ent = None
-    curr_lbl_parts: List[str] = []
-    curr_tail_parts: List[str] = []
-    curr_tail_type_parts: List[str] = []
-    curr_span_parts: List[str] = []
-    last_null = None
-    
-    entities: List[EntityBlock] = []
-    rejected: List[RejectedItem] = []
-
-    def flush_tail():
-        if state in (_State.TAIL_SPAN, _State.TAIL_TYPE_LABEL) and curr_tail_parts and curr_lbl_parts and curr_ent:
-            curr_ent["relations"].append({
-                "type": " ".join(curr_lbl_parts), 
-                "tail": " ".join(curr_tail_parts),
-                "tail_type": " ".join(curr_tail_type_parts) if curr_tail_type_parts else None
-            })
-            curr_lbl_parts.clear()
-            curr_tail_parts.clear()
-            curr_tail_type_parts.clear()
-
-    def flush_lbl():
-        if state == _State.TYPE_LABEL and curr_lbl_parts and curr_ent:
-            curr_ent["type"] = " ".join(curr_lbl_parts)
-            curr_lbl_parts.clear()
-        elif state == _State.NULL_LABEL and curr_lbl_parts:
-            label_str = " ".join(curr_lbl_parts)
-            if label_str:
-                rejected.append({"kind": last_null or "rel", "label": label_str})
-            curr_lbl_parts.clear()
-
-    def flush_ent():
-        nonlocal curr_ent
-        if curr_ent and curr_span_parts:
-            span_text = " ".join(curr_span_parts)
-            if span_text:
-                entities.append({
-                    "text": span_text, 
-                    "type": curr_ent.get("type"), 
-                    "relations": curr_ent.get("relations", [])
-                })
-        curr_ent = None
-        curr_span_parts.clear()
-
-    for t in tokens:
-        if t in {tok.ent_start, getattr(tok, "head", None)}:
-            flush_tail(); flush_lbl(); flush_ent()
-            curr_ent, state = {"type": None, "relations": []}, _State.ENT_SPAN
-        elif t == getattr(tok, "nest", None):
-            flush_tail(); flush_lbl()
-            state = _State.IDLE
-        elif t == tok.type_:
-            if state == _State.TAIL_SPAN:
-                state = _State.TAIL_TYPE_LABEL
-                curr_tail_type_parts.clear()
-            else:
-                flush_tail(); flush_lbl(); curr_lbl_parts.clear()
-                if state == _State.NULL_LABEL: last_null = "type"
-                else: state = _State.TYPE_LABEL
-        elif t == tok.rel:
-            flush_tail(); flush_lbl(); curr_lbl_parts.clear()
-            if state == _State.NULL_LABEL: last_null = "rel"
-            else: state = _State.REL_LABEL
-        elif t == tok.tail:
-            curr_tail_parts.clear()
-            state = _State.TAIL_SPAN
-        elif t == tok.ent_end:
-            flush_tail(); flush_lbl(); flush_ent()
-            state = _State.IDLE
-        elif t == tok.null:
-            flush_tail(); flush_lbl(); flush_ent()
-            curr_lbl_parts.clear()
-            last_null = None
-            state = _State.NULL_LABEL
-        else:
-            if state == _State.ENT_SPAN and curr_ent is not None: 
-                curr_span_parts.append(t)
-            elif state in (_State.TYPE_LABEL, _State.REL_LABEL, _State.NULL_LABEL): 
-                curr_lbl_parts.append(t)
-            elif state == _State.TAIL_SPAN: 
-                curr_tail_parts.append(t)
-            elif state == _State.TAIL_TYPE_LABEL:
-                curr_tail_type_parts.append(t)
-
-    flush_tail(); flush_lbl(); flush_ent()
-    return _deduplicate_entities(entities), rejected
+    return [], []
 
 
 def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Triplet]:

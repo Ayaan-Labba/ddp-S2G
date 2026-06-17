@@ -17,9 +17,9 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from s2g.linearisation import (
     S2GTokens, add_special_tokens_to_tokenizer,
-    build_boundary_encoder_input, build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_ner_encoder_input, build_re_encoder_input, build_boundary_re_encoder_input,
-    build_pipeline_re_encoder_input, extract_triplets, find_all_token_spans, parse_sel,
+    build_boundary_joint_encoder_input, build_joint_encoder_input,
+    build_re_encoder_input, build_boundary_re_encoder_input,
+    extract_triplets, find_all_token_spans, parse_sel,
     VARIANT_TO_TASKS,
 )
 from s2g.model import build_constraint_processor
@@ -64,51 +64,25 @@ def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src
     return " ".join(raw.split())
 
 
-def extract_pipeline(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None, ssi_prompt: str="ssi") -> Dict[str, Any]:
+def extract_re(text: str, model: Any, tokenizer: Any, entity_schema: List[str], rel_schema: List[str], tokens: Any, num_beams: int=4, max_source_length: int=300, max_target_length: int=200, device: Optional[Any]=None, constraint_decoding: bool=False, tasks=None, ssi_prompt: str="ssi") -> Dict[str, Any]:
     _ensure_nltk_punkt()
     device = device or next(model.parameters()).device
     src_toks = nltk.word_tokenize(text)
 
     if tasks is None:
-        tasks = ["ner", "re"]
-    use_boundary = "boundary" in tasks
-    use_ner = "ner" in tasks
+        tasks = ["re"]
     use_re = "re" in tasks
     use_boundary_re = "boundary_re" in tasks
 
-    b_ents = []
-    if use_boundary:
-        b_ents, _ = parse_sel(_generate_single(model, tokenizer, build_boundary_encoder_input(text, tok=tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
-    
-    n_ents = []
-    if use_ner:
-        if use_boundary:
-            n_spans = list(dict.fromkeys(s for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
-        else:
-            n_spans = []
-        n_ents, _ = parse_sel(_generate_single(model, tokenizer, build_ner_encoder_input(entity_schema, src_toks, n_spans, False, tokens, ssi_prompt=ssi_prompt), tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
-
     r_ents = []
     if use_re or use_boundary_re:
-        if use_ner:
-            r_entities = list(dict.fromkeys((*s, e["type"]) for e in n_ents if e.get("type") for s in find_all_token_spans(src_toks, e["text"])))
-        elif use_boundary:
-            r_entities = list(dict.fromkeys((*s, "") for e in b_ents for s in find_all_token_spans(src_toks, e["text"])))
-        else:
-            r_entities = []
         if tokens.variant == "re":
             re_input = build_re_encoder_input(entity_schema, rel_schema, text, False, tokens, ssi_prompt=ssi_prompt)
         elif tokens.variant == "boundary_re":
             re_input = build_boundary_re_encoder_input(rel_schema, text, False, tokens, ssi_prompt=ssi_prompt)
-        else:
-            re_input = build_pipeline_re_encoder_input(rel_schema, src_toks, r_entities, False, tokens, ssi_prompt=ssi_prompt)
         r_ents, _ = parse_sel(_generate_single(model, tokenizer, re_input, tokens, num_beams, max_source_length, max_target_length, device, constraint_decoding, entity_schema=entity_schema, rel_schema=rel_schema), tok=tokens)
 
     res = {"text": text, "tokens": src_toks}
-    if use_boundary:
-        res["boundary_spans"] = [e["text"] for e in b_ents]
-    if use_ner:
-        res["ner_entities"] = [{"text": e["text"], "type": e.get("type")} for e in n_ents]
     if use_re or use_boundary_re:
         res["re_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(r_ents)]
     return res
@@ -158,7 +132,7 @@ def main() -> None:
     model.to(device).eval()
 
     kwargs = {"model": model, "tokenizer": tokenizer, "entity_schema": load_entity_schema(args.entity_schema_file), "rel_schema": load_schema(args.schema_file), "tokens": tokens, "num_beams": args.num_beams, "max_source_length": args.max_source_length, "max_target_length": args.max_target_length, "device": device, "constraint_decoding": args.constraint_decoding.lower() in ("true", "1", "yes"), "tasks": tasks, "ssi_prompt": args.ssi_prompt}
-    extract_fn = extract_pipeline if model_variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"} else extract_boundary_joint
+    extract_fn = extract_re if model_variant in {"re", "boundary_re"} else extract_boundary_joint
 
     if args.input_file:
         with open(args.input_file, encoding="utf-8") as f: sentences = [ln.strip() for ln in f if ln.strip()]

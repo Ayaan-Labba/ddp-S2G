@@ -31,16 +31,15 @@ from tqdm.auto import tqdm
 from s2g.evaluation.metrics import compute_metrics_for_task
 from s2g.linearisation import (
     S2GTokens, AnyTokens, EntityBlock, VARIANT_TO_TASKS,
-    build_boundary_encoder_input, build_boundary_joint_encoder_input,
-    build_joint_encoder_input, build_ner_encoder_input,
+    build_boundary_joint_encoder_input,
+    build_joint_encoder_input,
     build_re_encoder_input, build_boundary_re_encoder_input,
-    build_pipeline_re_encoder_input,
     extract_triplets, find_all_token_spans, parse_sel,
 )
 
 logger = logging.getLogger(__name__)
 
-_PIPELINE_TASK_KEYS      = ("boundary", "ner", "re", "boundary_re")
+_PIPELINE_TASK_KEYS      = ("re", "boundary_re")
 _BOUNDARY_JOINT_TASK_KEYS = ("boundary_joint", "joint")
 _ALL_TASK_KEYS            = _PIPELINE_TASK_KEYS + _BOUNDARY_JOINT_TASK_KEYS
 
@@ -355,7 +354,7 @@ class S2GTrainer(Seq2SeqTrainer):
 
         local_instances = [dataset[i] for i in range(start_idx, end_idx)]
 
-        if self._variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"}:
+        if self._variant in {"re", "boundary_re"}:
             local_data = self._get_pipeline_predictions(local_instances, prefix=prefix)
         else:
             local_data = self._get_boundary_joint_predictions(local_instances, prefix=prefix)
@@ -373,34 +372,10 @@ class S2GTrainer(Seq2SeqTrainer):
         if rank == 0:
             m: Dict[str, float] = {}
 
-            if self._variant in {"pipeline", "boundary_pipeline", "boundary", "ner", "re", "boundary_re"}:
-                b_per_inst, n_per_inst, r_per_inst = (
-                    all_data["b_per_inst"], all_data["n_per_inst"], all_data["r_per_inst"]
-                )
-                g_ents, g_mentions = all_data["g_ents"], all_data["g_mentions"]
+            if self._variant in {"re", "boundary_re"}:
+                r_per_inst = all_data["r_per_inst"]
                 g_trips, g_quints  = all_data["g_trips"], all_data["g_quints"]
                 ner_maps           = all_data["ner_maps"]
-
-                if "boundary" in self._tasks:
-                    m.update(compute_metrics_for_task(
-                        "boundary",
-                        entity_schema=self._entity_schema,
-                        all_pred_entities=[[e["text"] for e in b] for b in b_per_inst],
-                        all_gold_entities=g_ents,
-                    ))
-
-                if "ner" in self._tasks:
-                    m.update(compute_metrics_for_task(
-                        "ner",
-                        entity_schema=self._entity_schema,
-                        all_pred_entities=[[e["text"] for e in n] for n in n_per_inst],
-                        all_gold_entities=g_ents,
-                        all_pred_entity_mentions=[
-                            [(e["text"], e.get("type", "")) for e in n if e.get("type")]
-                            for n in n_per_inst
-                        ],
-                        all_gold_entity_mentions=g_mentions,
-                    ))
 
                 if "re" in self._tasks:
                     m.update(compute_metrics_for_task(
@@ -471,39 +446,6 @@ class S2GTrainer(Seq2SeqTrainer):
         use_re          = "re"          in self._tasks
         use_boundary_re = "boundary_re" in self._tasks
 
-        # --- Boundary step ---
-        if use_boundary:
-            b_inputs  = [
-                build_boundary_encoder_input(inst["text"], tok=self._tokens, ssi_prompt=self._ssi_prompt)
-                for inst in instances
-            ]
-            b_per_inst = self._run_generation(b_inputs, desc=f"({prefix}) Boundary")
-        else:
-            b_per_inst = [[] for _ in instances]
-
-        # --- NER step ---
-        if use_ner:
-            if use_boundary:
-                n_inputs = [
-                    build_ner_encoder_input(
-                        self._entity_schema, inst["tokens"],
-                        _to_spans(inst["tokens"], b),
-                        False, self._tokens, ssi_prompt=self._ssi_prompt,
-                    )
-                    for inst, b in zip(instances, b_per_inst)
-                ]
-            else:
-                n_inputs = [
-                    build_ner_encoder_input(
-                        self._entity_schema, inst["tokens"], [],
-                        False, self._tokens, ssi_prompt=self._ssi_prompt,
-                    )
-                    for inst in instances
-                ]
-            n_per_inst = self._run_generation(n_inputs, desc=f"({prefix}) NER")
-        else:
-            n_per_inst = [[] for _ in instances]
-
         # --- RE step ---
         r_per_inst: List[List[EntityBlock]] = []
         ner_maps:   List[Dict[str, str]]    = []
@@ -511,62 +453,34 @@ class S2GTrainer(Seq2SeqTrainer):
         if use_re or use_boundary_re:
             r_inputs: List[str] = []
 
-            if not use_boundary and not use_ner:
-                # Gold entities are passed as context (oracle RE)
-                for inst in instances:
-                    if use_re:
-                        entity_data = [
-                            (int(e["offset"][0]), int(e["offset"][1]), e.get("type", ""))
-                            for e in inst["entities"]
-                        ]
-                        ner_maps.append({e["text"]: e.get("type", "") for e in inst["entities"]})
-                    else:
-                        entity_data = [
-                            (int(e["offset"][0]), int(e["offset"][1]), "")
-                            for e in inst["entities"]
-                        ]
-                        ner_maps.append({e["text"]: "" for e in inst["entities"]})
-                    if self._tokens.variant == "re":
-                        r_inputs.append(
-                            build_re_encoder_input(
-                                self._entity_schema, self._rel_schema, inst["text"],
-                                False, self._tokens, ssi_prompt=self._ssi_prompt,
-                            )
+            # Gold entities are passed as context (oracle RE)
+            for inst in instances:
+                if use_re:
+                    entity_data = [
+                        (int(e["offset"][0]), int(e["offset"][1]), e.get("type", ""))
+                        for e in inst["entities"]
+                    ]
+                    ner_maps.append({e["text"]: e.get("type", "") for e in inst["entities"]})
+                else:
+                    entity_data = [
+                        (int(e["offset"][0]), int(e["offset"][1]), "")
+                        for e in inst["entities"]
+                    ]
+                    ner_maps.append({e["text"]: "" for e in inst["entities"]})
+                if self._tokens.variant == "re":
+                    r_inputs.append(
+                        build_re_encoder_input(
+                            self._entity_schema, self._rel_schema, inst["text"],
+                            False, self._tokens, ssi_prompt=self._ssi_prompt,
                         )
-                    elif self._tokens.variant == "boundary_re":
-                        r_inputs.append(
-                            build_boundary_re_encoder_input(
-                                self._rel_schema, inst["text"],
-                                False, self._tokens, ssi_prompt=self._ssi_prompt,
-                            )
+                    )
+                elif self._tokens.variant == "boundary_re":
+                    r_inputs.append(
+                        build_boundary_re_encoder_input(
+                            self._rel_schema, inst["text"],
+                            False, self._tokens, ssi_prompt=self._ssi_prompt,
                         )
-                    else:
-                        r_inputs.append(
-                            build_pipeline_re_encoder_input(
-                                self._rel_schema, inst["tokens"], entity_data,
-                                False, self._tokens, ssi_prompt=self._ssi_prompt,
-                            )
-                        )
-            else:
-                for inst, b, n in zip(instances, b_per_inst, n_per_inst):
-                    if use_ner:
-                        r_inputs.append(
-                            build_pipeline_re_encoder_input(
-                                self._rel_schema, inst["tokens"],
-                                _to_entity_data(inst["tokens"], n, use_type=True),
-                                False, self._tokens, ssi_prompt=self._ssi_prompt,
-                            )
-                        )
-                        ner_maps.append({e["text"]: e.get("type", "") for e in n})
-                    else:
-                        r_inputs.append(
-                            build_pipeline_re_encoder_input(
-                                self._rel_schema, inst["tokens"],
-                                _to_entity_data(inst["tokens"], b, use_type=False),
-                                False, self._tokens, ssi_prompt=self._ssi_prompt,
-                            )
-                        )
-                        ner_maps.append({e["text"]: "" for e in b})
+                    )
 
             r_per_inst = self._run_generation(r_inputs, desc=f"({prefix}) RE")
         else:
@@ -574,8 +488,6 @@ class S2GTrainer(Seq2SeqTrainer):
             ner_maps   = [{} for _ in instances]
 
         return {
-            "b_per_inst": b_per_inst,
-            "n_per_inst": n_per_inst,
             "r_per_inst": r_per_inst,
             "ner_maps":   ner_maps,
             "g_ents":   [[e["text"] for e in inst["entities"]] for inst in instances],
@@ -761,30 +673,6 @@ class S2GTrainer(Seq2SeqTrainer):
                 all_gold_triplets=[extract_triplets(g) for g in gold_entities],
                 all_pred_quintuples=[_assemble_joint_quintuples(p) for p in pred_entities],
                 all_gold_quintuples=[_assemble_joint_quintuples(g) for g in gold_entities],
-                all_pred_entities=[[e["text"] for e in p] for p in pred_entities],
-                all_gold_entities=[[e["text"] for e in g] for g in gold_entities],
-                all_pred_entity_mentions=[
-                    [(e["text"], e.get("type", "")) for e in p if e.get("type")]
-                    for p in pred_entities
-                ],
-                all_gold_entity_mentions=[
-                    [(e["text"], e.get("type", "")) for e in g if e.get("type")]
-                    for g in gold_entities
-                ],
-            ))
-
-        elif self._variant == "boundary":
-            m.update(compute_metrics_for_task(
-                "boundary",
-                entity_schema=self._entity_schema,
-                all_pred_entities=[[e["text"] for e in p] for p in pred_entities],
-                all_gold_entities=[[e["text"] for e in g] for g in gold_entities],
-            ))
-
-        elif self._variant == "ner":
-            m.update(compute_metrics_for_task(
-                "ner",
-                entity_schema=self._entity_schema,
                 all_pred_entities=[[e["text"] for e in p] for p in pred_entities],
                 all_gold_entities=[[e["text"] for e in g] for g in gold_entities],
                 all_pred_entity_mentions=[

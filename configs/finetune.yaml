@@ -70,13 +70,10 @@ generation:
   constraint_decoding: false        # False at training time; enable in evaluate.py
 
 ssi:
-  max_ent_types_in_prompt: null     # null = use full entity schema (good for small schemas like CoNLL04)
-  max_rel_types_in_prompt: null     # null = use full relation schema
+  max_ent_types: null     # null = use full entity schema (good for small schemas like CoNLL04)
+  max_rel_types: null     # null = use full relation schema
   random_prompt: false
-  random_sel: false
-  use_rejection: false
   ssi_prompt: ssi
-  warm: true
 
 checkpoint:
   save_top_k: 3
@@ -101,3 +98,7 @@ hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: null
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

@@ -49,11 +49,7 @@ generation:
 
 ssi:
   mode: budget
-  max_ent_types_in_prompt: null
-  max_rel_types_in_prompt: null
   random_prompt: false
-  random_sel: false
-  use_rejection: false
   ssi_prompt: natural
   use_nesting: false
 
@@ -80,3 +76,7 @@ hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: [1]
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

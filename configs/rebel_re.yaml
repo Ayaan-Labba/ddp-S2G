@@ -103,3 +103,7 @@ hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: [0]                # null = use all visible GPUs; [0] = first GPU only
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

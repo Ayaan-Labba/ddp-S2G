@@ -61,11 +61,11 @@ ssi:                                # Schema-Sensitive-Input dynamic constructio
   positive_rate_end: 1.0            # Bernoulli prob. for positives at step T
   negative_rate_start: 1.0          # Bernoulli prob. for selected negatives at step 0
   negative_rate_end: 1.0            # Bernoulli prob. for selected negatives at step T
+  pos_max_start: 1
+  pos_max_end: 20
   negative_max_start: 30            # k(0): max negatives drawn from pool at training start
   negative_max_end: 30              # k(T): max negatives drawn from pool at training end
   random_prompt: false              # Shuffle SSI type order
-  random_sel: false                 # Shuffle SEL entity / relation order
-  use_rejection: false
 
 checkpoint:
   save_top_k: 3                     # Keep top-k checkpoints
@@ -89,3 +89,7 @@ hardware:
   num_workers: 4                                    # DataLoader workers PER GPU
   persistent_workers: true                          # Avoid re-forking workers each epoch
   gpu_ids: null                                     # null = all available; e.g. [0, 1, 7]
+sel:
+  random_sel: false                 # Shuffle SEL entity / relation order
+  use_rejection: false
+  warm_start: true

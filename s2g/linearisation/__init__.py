@@ -5,11 +5,10 @@ from .special_tokens import (
     AnyTokens, S2GTokens, add_special_tokens_to_tokenizer, get_token_ids, VARIANT_TO_TASKS,
 )
 from .ssi import (
-    augment_ner_text, augment_re_text, build_boundary_encoder_input,
-    build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_ner_encoder_input, build_ner_ssi, build_re_encoder_input,
-    build_boundary_re_encoder_input, build_pipeline_re_encoder_input,
-    build_rel_ssi, find_all_token_spans, find_token_span,
+    build_boundary_joint_encoder_input,
+    build_joint_encoder_input, build_ent_ssi, build_re_encoder_input,
+    build_boundary_re_encoder_input, build_rel_ssi,
+    find_all_token_spans, find_token_span,
 )
 from .sel import (
     EntityBlock, RejectedItem, Triplet, build_sel, extract_triplets,
@@ -18,10 +17,8 @@ from .sel import (
 
 __all__ = [
     "AnyTokens", "S2GTokens", "add_special_tokens_to_tokenizer", "get_token_ids", "VARIANT_TO_TASKS",
-    "augment_ner_text", "augment_re_text", "build_boundary_encoder_input",
     "build_boundary_joint_encoder_input", "build_joint_encoder_input",
-    "build_ner_encoder_input", "build_ner_ssi", "build_re_encoder_input",
-    "build_boundary_re_encoder_input", "build_pipeline_re_encoder_input",
+    "build_ent_ssi", "build_re_encoder_input", "build_boundary_re_encoder_input",
     "build_rel_ssi", "find_all_token_spans", "find_token_span",
     "EntityBlock", "RejectedItem", "Triplet", "build_sel", "extract_triplets",
     "filter_entity_blocks", "organize_by_entity", "parse_sel",

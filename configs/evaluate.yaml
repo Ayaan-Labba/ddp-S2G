@@ -37,7 +37,6 @@ train:
 
 ssi:
   ssi_prompt: natural
-  warm: true
 
 data:
   data_dir: data/conll04
@@ -48,3 +47,7 @@ data:
 hardware:
   num_workers: 4
   gpu_ids: [0]
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: true

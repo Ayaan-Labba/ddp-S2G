@@ -66,17 +66,25 @@ def main() -> None:
     elif cfg.train.precision == "fp16":
         model = model.half()
         
-    tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.ssi.warm)
+    tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.sel.use_rejection)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.sel.warm_start)
 
     tasks = VARIANT_TO_TASKS[cfg.model.model_variant]
 
     collator = S2GCollator(tokenizer, entity_schema, rel_schema, {
         "model_variant": cfg.model.model_variant, "max_source_length": cfg.tokenization.max_source_length, "max_target_length": cfg.tokenization.max_target_length,
-        "max_ent_types_in_prompt": cfg.ssi.max_ent_types_in_prompt or len(entity_schema), "max_rel_types_in_prompt": cfg.ssi.max_rel_types_in_prompt or len(rel_schema),
-        "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.ssi.random_sel,
+        "max_ent_types": cfg.ssi.max_ent_types or len(entity_schema), "max_rel_types": cfg.ssi.max_rel_types or len(rel_schema),
+        "random_prompt": cfg.ssi.random_prompt, "random_sel": cfg.sel.random_sel,
+        "positive_rate_start": getattr(cfg.ssi, "positive_rate_start", 0.9),
+        "positive_rate_end": getattr(cfg.ssi, "positive_rate_end", 0.9),
+        "negative_rate_start": getattr(cfg.ssi, "negative_rate_start", 0.1),
+        "negative_rate_end": getattr(cfg.ssi, "negative_rate_end", 0.1),
+        "pos_max_start": getattr(cfg.ssi, "pos_max_start", 1),
+        "pos_max_end": getattr(cfg.ssi, "pos_max_end", 20),
+        "negative_max_start": getattr(cfg.ssi, "negative_max_start", 1),
+        "negative_max_end": getattr(cfg.ssi, "negative_max_end", 20),
         "tasks": tasks, "mode": cfg.ssi.mode, "max_steps": cfg.train.max_steps,
-        "use_rejection": cfg.ssi.use_rejection,
+        "use_rejection": cfg.sel.use_rejection,
         "use_nesting": getattr(cfg.ssi, "use_nesting", True),
         "ssi_prompt": cfg.ssi.ssi_prompt,
         "data_dir": cfg.data.data_dir,

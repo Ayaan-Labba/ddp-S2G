@@ -69,21 +69,26 @@ class GenerationConfig:
 @dataclass
 class SSIConfig:
     mode: str = "budget"
-    max_ent_types_in_prompt: Optional[int] = None
-    max_rel_types_in_prompt: Optional[int] = None
+    max_ent_types: Optional[int] = None
+    max_rel_types: Optional[int] = None
     max_steps: int = 150_000
     positive_rate_start: float = 0.9
     positive_rate_end: float = 0.9
     negative_rate_start: float = 0.1
     negative_rate_end: float = 0.1
+    pos_max_start: int = 1
+    pos_max_end: int = 20
     negative_max_start: int = 1
     negative_max_end: int = 20
     random_prompt: bool = False
-    random_sel: bool = False
-    use_rejection: bool = False
     use_nesting: bool = True
     ssi_prompt: str = "ssi"
-    warm: bool = True
+
+@dataclass
+class SELConfig:
+    random_sel: bool = False
+    use_rejection: bool = False
+    warm_start: bool = True
 
 @dataclass
 class CheckpointConfig:
@@ -129,6 +134,7 @@ class S2GConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     ssi: SSIConfig = field(default_factory=SSIConfig)
+    sel: SELConfig = field(default_factory=SELConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     callbacks: CallbacksConfig = field(default_factory=CallbacksConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
