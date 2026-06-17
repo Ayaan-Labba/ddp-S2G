@@ -166,7 +166,7 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
-                    ent_triplet.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
         if triplet_parts:
@@ -302,15 +302,10 @@ def parse_sel(text: str, tok: AnyTokens = S2GTokens("pipeline")) -> Tuple[List[E
                 current_ent_type.clear()
                 i += 1
             elif t == getattr(tok, "head", None):
-                if i + 1 < len(tokens) and tokens[i + 1] == getattr(tok, "nest", None):
-                    flush_current_state()
-                    state = "IDLE"
-                    i += 2
-                else:
-                    flush_current_state()
-                    state = "HEAD"
-                    current_head_parts.clear()
-                    i += 1
+                flush_current_state()
+                state = "HEAD"
+                current_head_parts.clear()
+                i += 1
             elif t == tok.type_:
                 if state == "ENT_TEXT":
                     state = "ENT_TYPE"

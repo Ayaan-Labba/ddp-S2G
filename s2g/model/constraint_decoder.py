@@ -622,15 +622,13 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 exits = {self.rel_id}
-                if not state.span_tokens:
-                    exits.add(self.nest_id)
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.REL_LABEL:
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.head_id, self.null_id, self.eos_id}
+                exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.NEST:
