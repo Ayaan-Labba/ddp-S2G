@@ -157,7 +157,7 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
         m.update(compute_metrics_for_task("boundary", all_pred_entities=[[e["text"] for e in b] for b in b_per_inst], all_gold_entities=g_ents))
     
     if use_ner:
-        m.update(compute_metrics_for_task("ner", all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], all_gold_entities=g_ents, all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in n if e.get("type")] for n in n_per_inst], all_gold_entity_mentions=[[(e["text"], e.get("type","")) for e in inst["entities"]] for inst in instances]))
+        m.update(compute_metrics_for_task("ner", entity_schema=entity_schema, all_pred_entities=[[e["text"] for e in n] for n in n_per_inst], all_gold_entities=g_ents, all_pred_entity_mentions=[[(e["text"], e.get("type") or "") for e in n if e.get("type")] for n in n_per_inst], all_gold_entity_mentions=[[(e["text"], e.get("type","")) for e in inst["entities"]] for inst in instances]))
         
     if use_re:
         g_quints = [[(r["head"]["text"], r["head"].get("type","") if use_ner else "", r["type"], r["tail"]["text"], r["tail"].get("type","") if use_ner else "") for r in inst["relations"]] for inst in instances]
@@ -207,12 +207,14 @@ def _evaluate_boundary_joint(model, tokenizer, instances, entity_schema, rel_sch
         per_inst.append(res)
 
     if use_boundary_joint:
-        m.update(compute_metrics_for_task("boundary_joint", all_pred_triplets=[extract_triplets(j) for j in j_per_inst], all_gold_triplets=gold_trips))
+        m.update(compute_metrics_for_task("boundary_joint", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(j) for j in j_per_inst], all_gold_triplets=gold_trips))
     
     if use_joint:
         jp_maps = [{e["text"]: e.get("type", "") for e in jp} for jp in jp_per_inst]
         m.update(compute_metrics_for_task(
             "joint", 
+            rel_schema=rel_schema,
+            entity_schema=entity_schema,
             all_pred_triplets=[extract_triplets(jp) for jp in jp_per_inst], 
             all_gold_triplets=gold_trips, 
             all_pred_quintuples=[[(e["text"], jp_maps[i].get(e["text"], ""), rel["type"], rel["tail"], rel.get("tail_type") or jp_maps[i].get(rel["tail"], "")) for e in jp_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], 
