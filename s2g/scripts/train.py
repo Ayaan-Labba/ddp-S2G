@@ -58,9 +58,6 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    if hasattr(model.generation_config, "forced_bos_token_id"):
-        model.generation_config.forced_bos_token_id = None
-    
     # Ensure model parameters are explicitly cast to the configured precision
     if cfg.train.precision == "fp32":
         model = model.float()
