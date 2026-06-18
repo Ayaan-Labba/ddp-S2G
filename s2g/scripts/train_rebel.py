@@ -531,15 +531,7 @@ def main() -> None:
     dtype = precision_to_dtype.get(cfg.train.precision, torch.float32)
 
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
-    model     = AutoModelForSeq2SeqLM.from_pretrained(ckpt, dtype=dtype)
-
-    # Ensure model parameters are explicitly cast to the configured precision
-    if cfg.train.precision == "fp32":
-        model = model.float()
-    elif cfg.train.precision == "bf16":
-        model = model.to(torch.bfloat16)
-    elif cfg.train.precision == "fp16":
-        model = model.half()
+    model     = AutoModelForSeq2SeqLM.from_pretrained(ckpt, torch_dtype=dtype)
 
     # ── Special tokens ───────────────────────────────────────────────────────
     triplet_token, type_tag_map = _add_rebel_tokens(tokenizer, model, entity_schema)

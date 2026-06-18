@@ -314,7 +314,7 @@ def main() -> None:
     dtype = precision_to_dtype.get(cfg.train.precision, torch.float32)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name, dtype=dtype)
+    model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name, torch_dtype=dtype)
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)

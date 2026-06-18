@@ -111,7 +111,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True); parser.add_argument("--schema_file", required=True); parser.add_argument("--entity_schema_file", default=None); parser.add_argument("--input_file", default=None); parser.add_argument("--output_file", default=None); parser.add_argument("--constraint_decoding", default="false"); parser.add_argument("--num_beams", type=int, default=4); parser.add_argument("--max_source_length", type=int, default=300); parser.add_argument("--max_target_length", type=int, default=200); parser.add_argument("--ssi_prompt", default="ssi", choices=["ssi", "natural", "false"])
     args = parser.parse_args()
 
-    tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint, dtype="auto")
+    tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint, torch_dtype="auto")
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     variant_file = Path(args.checkpoint) / "model_variant.txt"

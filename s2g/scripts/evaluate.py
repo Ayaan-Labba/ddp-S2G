@@ -191,7 +191,7 @@ def main() -> None:
     if not (ckpt := cfg.model.pretrained_checkpoint): 
         raise ValueError("model.pretrained_checkpoint is required.")
 
-    tokenizer, model = AutoTokenizer.from_pretrained(ckpt), AutoModelForSeq2SeqLM.from_pretrained(ckpt, dtype="auto")
+    tokenizer, model = AutoTokenizer.from_pretrained(ckpt), AutoModelForSeq2SeqLM.from_pretrained(ckpt, torch_dtype="auto")
     model_variant = (Path(ckpt) / "model_variant.txt").read_text(encoding="utf-8").strip() if (Path(ckpt) / "model_variant.txt").exists() else cfg.model.model_variant
     
     if (Path(ckpt) / "tasks.json").exists():
