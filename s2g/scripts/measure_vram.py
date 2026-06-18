@@ -306,8 +306,15 @@ def main() -> None:
     device = torch.device("cuda:0")
 
     logger.info("Loading model and tokenizer: %s", cfg.model.name)
+    precision_to_dtype = {
+        "fp32": torch.float32,
+        "bf16": torch.bfloat16,
+        "fp16": torch.float16
+    }
+    dtype = precision_to_dtype.get(cfg.train.precision, torch.float32)
+
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
+    model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name, dtype=dtype)
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)

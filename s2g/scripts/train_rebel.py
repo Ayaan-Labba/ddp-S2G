@@ -523,8 +523,15 @@ def main() -> None:
     # ── Tokenizer + Model ────────────────────────────────────────────────────
     ckpt = cfg.model.pretrained_checkpoint or cfg.model.name
     logger.info("Loading tokenizer and model from %s", ckpt)
+    precision_to_dtype = {
+        "fp32": torch.float32,
+        "bf16": torch.bfloat16,
+        "fp16": torch.float16
+    }
+    dtype = precision_to_dtype.get(cfg.train.precision, torch.float32)
+
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
-    model     = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
+    model     = AutoModelForSeq2SeqLM.from_pretrained(ckpt, dtype=dtype)
 
     # Ensure model parameters are explicitly cast to the configured precision
     if cfg.train.precision == "fp32":
