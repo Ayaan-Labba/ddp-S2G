@@ -104,17 +104,60 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
 
     per_inst, m = [], {}
     for i, inst in enumerate(instances):
+        if use_re:
+            gold_triplets = [
+                {
+                    "head": r["head"]["text"],
+                    "head_type": r["head"].get("type") or "",
+                    "type": r["type"],
+                    "tail": r["tail"]["text"],
+                    "tail_type": r["tail"].get("type") or ""
+                }
+                for r in inst["relations"]
+            ]
+            re_triplets = [
+                {
+                    "head": e["text"],
+                    "head_type": e.get("type") or "",
+                    "type": rel["type"],
+                    "tail": rel["tail"],
+                    "tail_type": rel.get("tail_type") or ""
+                }
+                for e in r_per_inst[i]
+                for rel in e["relations"]
+            ]
+        else:
+            gold_triplets = [{"head": r["head"]["text"], "type": r["type"], "tail": r["tail"]["text"]} for r in inst["relations"]]
+            re_triplets = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(r_per_inst[i])]
+
         res = {
             "text": inst["text"],
-            "gold_triplets": [{"head": r["head"]["text"], "type": r["type"], "tail": r["tail"]["text"]} for r in inst["relations"]]
+            "gold_triplets": gold_triplets
         }
         if use_re or use_boundary_re:
-            res["re_triplets"] = [{"head": t[0], "type": t[1], "tail": t[2]} for t in extract_triplets(r_per_inst[i])]
+            res["re_triplets"] = re_triplets
         per_inst.append(res)
         
     if use_re:
         g_quints = [[(r["head"]["text"], r["head"].get("type",""), r["type"], r["tail"]["text"], r["tail"].get("type","")) for r in inst["relations"]] for inst in instances]
-        m.update(compute_metrics_for_task("re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], e.get("type") or "", rel["type"], rel["tail"], rel.get("tail_type") or "") for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
+        p_quints = [[(e["text"], e.get("type") or "", rel["type"], rel["tail"], rel.get("tail_type") or "") for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))]
+
+        # --- TEMP DEBUG: localize strict/boundary conflation for `re` ---
+        # Prints the first instance that has both a predicted and a gold relation.
+        # Look at index 1 (head_type) and index 4 (tail_type) of each tuple:
+        #   * empty ("") on PRED  -> parser/generation is not producing types
+        #   * empty ("") on GOLD  -> gold quint construction is dropping types
+        #   * both populated+equal -> types present but never discriminative
+        for _i in range(len(instances)):
+            if p_quints[_i] and g_quints[_i]:
+                logger.warning(
+                    "RE-DEBUG inst=%d\n  PRED ents = %s\n  PRED quint = %s\n  GOLD quint = %s",
+                    _i, r_per_inst[_i][:2], p_quints[_i][:3], g_quints[_i][:3],
+                )
+                break
+        # --- END TEMP DEBUG ---
+
+        m.update(compute_metrics_for_task("re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=p_quints, all_gold_quintuples=g_quints))
 
     if use_boundary_re:
         m.update(compute_metrics_for_task("boundary_re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances]))
