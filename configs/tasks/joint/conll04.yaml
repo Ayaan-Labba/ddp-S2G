@@ -7,13 +7,33 @@ model:
   pretrained_checkpoint: null       
   model_variant: joint           
 
+data:
+  data_dir: data/conll04
+  schema_file: data/conll04/relation.schema
+  entity_schema_file: data/conll04/entity.schema
+  output_dir: outputs/finetune/j-b-conll04-np
+
+evaluation:
+  evaluate_config: configs/tasks/joint/conll04_eval.yaml
+
 tokenization:
-  max_source_length: 240
-  max_target_length: 180            # Max values from `measure_lengths.py`
+  max_source_length: 250
+  max_target_length: 190            # Max values from `measure_lengths.py`
+
+ssi:
+  mode: budget
+  random_prompt: false
+  ssi_prompt: natural
+
+sel:
+  random_sel: false
+  use_rejection: false
+  warm_start: false
+  use_nesting: true
 
 optimizer:
   optim: adamw_torch
-  lr: 5.0e-5                        
+  lr: 4.0e-3                        
   weight_decay: 0.01
   adam_beta1: 0.9
   adam_beta2: 0.999
@@ -21,19 +41,19 @@ optimizer:
 
 scheduler:
   type: constant_with_warmup
-  warmup_steps: 1392                    # ~12% linear warmup across 200 epochs
+  warmup_steps: 346                    # ~12% linear warmup across 200 epochs
 
 train:
-  max_steps: 11600                     # ~200 epochs over 922 sentences with effective batch size 32
+  max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32
   batch_size: 16                     
-  gradient_acc_steps: 1              
+  gradient_acc_steps: 2              
   gradient_clip_value: 1.0
   gradient_checkpointing: False      
   precision: "bf16"
   seed: 0
 
 validation:
-  check_interval: 58               # Validate once per epoch
+  check_interval: 29               # Validate once per epoch
   percent_check: 1.0
   train_eval_percent_check: 0.25
   batch_size: 256
@@ -47,35 +67,20 @@ generation:
   early_stopping: false
   constraint_decoding: false        
 
-ssi:
-  mode: budget
-  random_prompt: false
-  ssi_prompt: natural
-
 checkpoint:
-  save_top_k: 3
+  save_top_k: 1
   every_n_steps: 100000
   resume_from: null
 
 callbacks:
-  sample_generation_interval: 580
+  sample_generation_interval: 290
 
 wandb:
   project: s2g
   entity: null
-  run_name: joint-base-conll04-n
-
-data:
-  data_dir: data/conll04
-  schema_file: data/conll04/relation.schema
-  entity_schema_file: data/conll04/entity.schema
-  output_dir: outputs/finetune/joint-base-conll04-n
+  run_name: j-b-conll04-np
 
 hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: [0]
-sel:
-  random_sel: false
-  use_rejection: false
-  warm_start: true
