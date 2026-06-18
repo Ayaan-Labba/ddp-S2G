@@ -317,7 +317,7 @@ def main() -> None:
     model     = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name, torch_dtype=dtype)
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
-    tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.ssi.use_rejection)
+    tokens    = S2GTokens(cfg.model.model_variant, use_rejection=cfg.sel.use_rejection)
     warm_start = cfg.sel.warm_start and (cfg.model.pretrained_checkpoint is None)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=warm_start)
     model.to(device)
