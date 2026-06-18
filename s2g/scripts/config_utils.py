@@ -80,7 +80,6 @@ class SSIConfig:
     negative_max_start: int = 1
     negative_max_end: int = 20
     random_prompt: bool = False
-    use_nesting: bool = True
     ssi_prompt: str = "ssi"
 
 @dataclass
@@ -88,6 +87,7 @@ class SELConfig:
     random_sel: bool = False
     use_rejection: bool = False
     warm_start: bool = True
+    use_nesting: bool = True
 
 @dataclass
 class CheckpointConfig:

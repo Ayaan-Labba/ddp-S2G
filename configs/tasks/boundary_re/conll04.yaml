@@ -51,7 +51,6 @@ ssi:
   mode: budget
   random_prompt: false
   ssi_prompt: natural
-  use_nesting: false
 
 checkpoint:
   save_top_k: 3
@@ -80,3 +79,4 @@ sel:
   random_sel: false
   use_rejection: false
   warm_start: true
+  use_nesting: false

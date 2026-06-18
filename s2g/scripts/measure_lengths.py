@@ -108,7 +108,7 @@ def main() -> None:
         "mode": cfg.ssi.mode, 
         "max_steps": cfg.train.max_steps,
         "use_rejection": cfg.sel.use_rejection,
-        "use_nesting": getattr(cfg.ssi, "use_nesting", True),
+        "use_nesting": cfg.sel.use_nesting,
         "ssi_prompt": cfg.ssi.ssi_prompt,
         "data_dir": cfg.data.data_dir,
     })
