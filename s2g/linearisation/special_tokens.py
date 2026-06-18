@@ -21,16 +21,16 @@ class S2GTokens:
         self.variant = variant
         self.use_rejection = use_rejection
 
-        self.ner       = "<ner>"
-        self.re        = "<re>"
-        self.type_     = "<type>"
-        self.rel       = "<rel>"
-        self.ent_start = "<ent>"
-        self.tail      = "<tail>"
-        self.null      = "<null>"
-        self.head      = "<head>"
-        self.nest      = "<nest>"
-        self.text      = "<text>"
+        self.ner       = "<extra_id_0>"
+        self.re        = "<extra_id_1>"
+        self.type_     = "<extra_id_2>"
+        self.rel       = "<extra_id_3>"
+        self.ent_start = "<extra_id_4>"
+        self.tail      = "<extra_id_5>"
+        self.null      = "<extra_id_6>"
+        self.head      = "<extra_id_7>"
+        self.nest      = "<extra_id_8>"
+        self.text      = "<extra_id_9>"
 
         active_map = {
             "re":                {"re", "text", "type_", "head", "rel", "tail", "nest"},
@@ -65,8 +65,9 @@ def add_special_tokens_to_tokenizer(
     num_added = tokenizer.add_special_tokens(
         {"additional_special_tokens": tokens.all_tokens}
     )
-    if model is not None and num_added > 0:
-        model.resize_token_embeddings(len(tokenizer))
+    if model is not None:
+        if num_added > 0:
+            model.resize_token_embeddings(len(tokenizer))
 
         if warm:
             # Warm-start new special-token embeddings with the mean embedding of a

@@ -283,7 +283,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             null_map = {
                 "boundary_joint": (r_seqs, {self.null_id, self.eos_id}), 
                 "joint": (e_seqs + r_seqs, {self.null_id, self.eos_id}),
-                # re and boundary_re are handled openly after <null> without a Trie
+                # re and boundary_re are handled openly after null_id without a Trie
             }
             n_seqs, n_sents = null_map.get(task, ([], {self.eos_id}))
             self._null_tries.append(Trie(n_seqs, n_sents))

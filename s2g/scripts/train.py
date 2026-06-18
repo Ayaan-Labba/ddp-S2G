@@ -70,7 +70,8 @@ def main() -> None:
     )
 
     tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.sel.use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=cfg.sel.warm_start)
+    warm_start = cfg.sel.warm_start and (cfg.model.pretrained_checkpoint is None)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=warm_start)
 
     tasks = VARIANT_TO_TASKS[cfg.model.model_variant]
 
