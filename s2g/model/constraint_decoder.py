@@ -111,6 +111,7 @@ class _HypState:
     fsm_state: FSMState = FSMState.START
     span_tokens: List[int] = field(default_factory=list)
     label_prefix: List[int] = field(default_factory=list)
+    is_rejection: bool = False
 
     def clone(self) -> '_HypState':
         """Deep copy for state transition caching."""
@@ -118,6 +119,7 @@ class _HypState:
             self.fsm_state,
             self.span_tokens.copy(),
             self.label_prefix.copy(),
+            self.is_rejection,
         )
 
 
@@ -146,11 +148,20 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         self.re_triplet_end_seq = get_suffix_ids(")]")
         self.re_next_triplet_start_seq = get_suffix_ids("), (")
 
-        # Encode the "MISSING:" prefix that ends the TRIPLETS section.
-        missing_start_ids = []
-        for pfx in ("MISSING:", " MISSING:", "MISSING :", " MISSING :"):
-            missing_start_ids.extend(tokenizer.encode(pfx, add_special_tokens=False))
-        self.missing_start_ids = frozenset(missing_start_ids)
+        # Encode the new rejection prefixes that end the positive extraction.
+        rejection_start_ids = []
+        for pfx in (
+            "\nMISSING ENTITIES:", " \nMISSING ENTITIES:", 
+            "\nMISSING RELATIONS:", " \nMISSING RELATIONS:",
+            "MISSING ENTITIES:", " MISSING ENTITIES:", 
+            "MISSING RELATIONS:", " MISSING RELATIONS:",
+            "\n", " \n",
+            "MISSING", " MISSING"
+        ):
+            encoded = tokenizer.encode(pfx, add_special_tokens=False)
+            if encoded:
+                rejection_start_ids.append(encoded[0])
+        self.rejection_start_ids = frozenset(rejection_start_ids)
 
         self._special_ids = frozenset(v for v in tid.values() if v is not None) | {self.eos_id, self.pad_id}
 
@@ -265,8 +276,8 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 ent_type_sentinel = {self.re_element_sep_seq[0]}
                 tail_type_sentinel = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
             else:
-                ent_type_sentinel = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
-                tail_type_sentinel = {self.nest_id, self.head_id, self.null_id, self.eos_id}
+                ent_type_sentinel = {self.ent_start_id, self.head_id, self.eos_id} | self.rejection_start_ids
+                tail_type_sentinel = {self.nest_id, self.head_id, self.eos_id} | self.rejection_start_ids
 
             if task in {"re", "boundary_re"}:
                 rel_sentinel = {self.re_element_sep_seq[0]}
@@ -295,9 +306,33 @@ class ConstraintDecodingProcessor(LogitsProcessor):
     def _batch_idx(self, hyp_idx: int) -> int: 
         return hyp_idx // self.num_beams
 
-    def _is_extract_active(self, seq: List[int], task: str) -> bool:
+    def _is_extract_active(self, seq: List[int], task: str, state_cache: Optional[Dict] = None) -> bool:
         if not seq:
             return False
+        
+        cache = state_cache if state_cache is not None else self._state_cache
+        
+        if len(seq) == 1:
+            return seq[0] not in self.rejection_start_ids
+
+        prev_seq_tuple = tuple(seq[:-1])
+        if prev_seq_tuple in cache:
+            prev_state = cache[prev_seq_tuple]
+            if prev_state.is_rejection:
+                return False
+            
+            last_token = seq[-1]
+            if last_token in self.rejection_start_ids:
+                exit_states = {
+                    FSMState.START,
+                    FSMState.TAIL_SPAN,
+                    FSMState.TAIL_TYPE_LABEL,
+                    FSMState.TYPE_LABEL,
+                    FSMState.ENT_DECL_SPAN
+                }
+                if prev_state.fsm_state in exit_states:
+                    return False
+        
         return True
 
 
@@ -334,15 +369,17 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         return frozenset(valid_next)
 
     def _transition(self, state: _HypState, token_id: int, task: str) -> None:
+        if token_id in self.rejection_start_ids:
+            state.fsm_state = FSMState.END
+            state.is_rejection = True
+            return
+
         if task in {"re", "boundary_re"}:
             if token_id == self.eos_id:
                 state.fsm_state = FSMState.END
             elif token_id == self.head_id:
                 state.fsm_state = FSMState.TRIPLET_HEAD_SPAN
                 state.span_tokens.clear()
-                state.label_prefix.clear()
-            elif token_id == self.null_id:
-                state.fsm_state = FSMState.NULL_LABEL
                 state.label_prefix.clear()
             elif token_id == self.nest_id:
                 state.fsm_state = FSMState.REL_LABEL
@@ -365,10 +402,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             else:
                 if state.fsm_state in {FSMState.TRIPLET_HEAD_SPAN, FSMState.TAIL_SPAN}:
                     state.span_tokens.append(token_id)
-                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.TAIL_TYPE_LABEL, FSMState.NULL_LABEL}:
+                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.TAIL_TYPE_LABEL}:
                     state.label_prefix.append(token_id)
             return
-
 
         if task in {"joint", "boundary_joint"}:
             if token_id == self.eos_id: 
@@ -377,28 +413,21 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 pass  
             elif token_id == self.ent_start_id: 
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.ENT_DECL_SPAN, [], []
-
             elif token_id == self.head_id: 
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.TRIPLET_HEAD_SPAN, [], []
             elif token_id == self.type_id: 
                 if state.fsm_state == FSMState.ENT_DECL_SPAN:
                     state.fsm_state, state.label_prefix = FSMState.TYPE_LABEL, []
-                elif state.fsm_state == FSMState.NULL_LABEL:
-                    pass
-                else:
-                    pass
             elif token_id == self.rel_id: 
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
             elif token_id == self.tail_id: 
                 state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
             elif token_id == self.nest_id:
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
-            elif token_id == self.null_id: 
-                state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
             else:
                 if state.fsm_state in {FSMState.ENT_DECL_SPAN, FSMState.TRIPLET_HEAD_SPAN, FSMState.TAIL_SPAN}: 
                     state.span_tokens.append(token_id)
-                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL, FSMState.NULL_LABEL}:
+                elif state.fsm_state in {FSMState.TYPE_LABEL, FSMState.REL_LABEL}:
                     state.label_prefix.append(token_id)
             return
 
@@ -407,7 +436,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         
         if task in {"re", "boundary_re"}:
             if state.fsm_state == FSMState.START:
-                return frozenset({self.head_id, self.null_id, self.eos_id})
+                return frozenset({self.head_id, self.eos_id}) | self.rejection_start_ids
                 
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 exits = {self.type_id} if task == "re" else {self.rel_id}
@@ -422,15 +451,13 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.type_id} if task == "re" else ({self.nest_id, self.head_id, self.null_id, self.eos_id})
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
+                exits = {self.type_id} if task == "re" else ({self.nest_id, self.head_id, self.eos_id} | self.rejection_start_ids)
+                res = frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits)
+                return res if res else (frozenset({self.eos_id}) | self.rejection_start_ids)
                 
             if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
-                sentinels = {self.nest_id, self.head_id, self.null_id, self.eos_id}
+                sentinels = {self.nest_id, self.head_id, self.eos_id} | self.rejection_start_ids
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
-                
-            if state.fsm_state == FSMState.NULL_LABEL:
-                return self._null_tries[b_idx].get_valid_next(state.label_prefix)
                 
             if state.fsm_state == FSMState.END:
                 return frozenset({self.eos_id})
@@ -440,14 +467,15 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             
         if task in {"joint", "boundary_joint"}:
             if state.fsm_state == FSMState.START: 
-                return frozenset({self.ent_start_id, self.head_id, self.null_id, self.eos_id})
+                return frozenset({self.ent_start_id, self.head_id, self.eos_id}) | self.rejection_start_ids
             
             if state.fsm_state == FSMState.ENT_DECL_SPAN:
-                exits = {self.type_id} if task == "joint" else {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
+                exits = {self.type_id} if task == "joint" else ({self.ent_start_id, self.head_id, self.eos_id} | self.rejection_start_ids)
+                res = frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits)
+                return res if res else (frozenset({self.eos_id}) | self.rejection_start_ids)
                 
             if state.fsm_state == FSMState.TYPE_LABEL:
-                sentinels = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
+                sentinels = {self.ent_start_id, self.head_id, self.eos_id} | self.rejection_start_ids
                 return self._ent_type_tries[b_idx].get_valid_next(state.label_prefix) if self._ent_type_tries[b_idx] else frozenset(sentinels)
 
             if state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
@@ -458,11 +486,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
-                return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
-                
-            if state.fsm_state == FSMState.NULL_LABEL:
-                return self._null_tries[b_idx].get_valid_next(state.label_prefix)
+                exits = {self.nest_id, self.head_id, self.eos_id} | self.rejection_start_ids
+                res = frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits)
+                return res if res else (frozenset({self.eos_id}) | self.rejection_start_ids)
 
             return frozenset({self.eos_id, self.pad_id})
 
@@ -486,7 +512,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             is_active = self._is_extract_active(seq, task)
                 
             if not is_active:
-                new_cache[seq_tuple] = _HypState()
+                new_cache[seq_tuple] = _HypState(is_rejection=True)
                 continue
 
             if prev_seq_tuple in self._state_cache:
@@ -494,13 +520,20 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 self._transition(state, last_token, task)
             else:
                 state = _HypState()
+                temp_cache = {}
                 for idx in range(len(seq)):
                     tok = seq[idx]
                     sub_seq = seq[:idx+1]
-                    if self._is_extract_active(sub_seq, task):
+                    sub_seq_tuple = tuple(sub_seq)
+                    
+                    combined_cache = {**self._state_cache, **temp_cache}
+                    is_active_sub = self._is_extract_active(sub_seq, task, combined_cache)
+                    if is_active_sub:
                         self._transition(state, tok, task)
+                        temp_cache[sub_seq_tuple] = state.clone()
                     else:
-                        state.fsm_state = FSMState.START
+                        state = _HypState(is_rejection=True)
+                        temp_cache[sub_seq_tuple] = state.clone()
                     
             new_cache[seq_tuple] = state
 
@@ -514,6 +547,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
         # Swap in the new cache to automatically prune pruned beam branches
         self._state_cache = new_cache
         return scores
+
 
 
 def build_constraint_processor(

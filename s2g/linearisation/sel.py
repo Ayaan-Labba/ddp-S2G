@@ -103,14 +103,11 @@ def build_sel(
         if extract_parts:
             parts.append(" ".join(extract_parts))
 
+        structured_str = " ".join(parts)
         if use_rejection:
-            _append_null_block(
-                parts, tok, 
-                ent_types=[],
-                rel_types=(rejected_rel_types or []) if task in {"boundary_re", "re"} else [],
-                random_sel=random_sel
-            )
-        return " ".join(parts)
+            rel_types = (rejected_rel_types or []) if task in {"boundary_re", "re"} else []
+            structured_str += build_rejection_string([], rel_types, random_sel)
+        return structured_str
 
 
     if task in {"joint", "boundary_joint"}:
@@ -143,22 +140,41 @@ def build_sel(
         if triplet_parts:
             parts.append(" ".join(triplet_parts))
 
+        structured_str = " ".join(parts)
         if use_rejection:
-            _append_null_block(
-                parts, tok, 
-                ent_types=(rejected_ent_types or []) if task == "joint" else [],
-                rel_types=(rejected_rel_types or []) if task in {"boundary_joint", "joint"} else [],
-                random_sel=random_sel
-            )
-        return " ".join(parts)
+            ent_types = (rejected_ent_types or []) if task == "joint" else []
+            rel_types = (rejected_rel_types or []) if task in {"boundary_joint", "joint"} else []
+            structured_str += build_rejection_string(ent_types, rel_types, random_sel)
+        return structured_str
 
     return ""
 
 
 def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:
+    lines = text.split("\n")
+    structured_part = lines[0]
+    rejected: List[RejectedItem] = []
+    
+    for line in lines[1:]:
+        line_strip = line.strip()
+        if line_strip.startswith("MISSING ENTITIES:"):
+            ent_str = line_strip[len("MISSING ENTITIES:"):].strip()
+            if ent_str:
+                for t in ent_str.split(","):
+                    t_strip = t.strip()
+                    if t_strip:
+                        rejected.append({"kind": "type", "label": t_strip})
+        elif line_strip.startswith("MISSING RELATIONS:"):
+            rel_str = line_strip[len("MISSING RELATIONS:"):].strip()
+            if rel_str:
+                for r in rel_str.split(","):
+                    r_strip = r.strip()
+                    if r_strip:
+                        rejected.append({"kind": "rel", "label": r_strip})
+
     special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
     pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
-    tokens = [t.strip() for t in pattern.split(text) if t.strip()]
+    tokens = [t.strip() for t in pattern.split(structured_part) if t.strip()]
 
     if tok.variant in {"joint", "boundary_joint"}:
         state = "IDLE"
@@ -167,15 +183,10 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
         current_head_parts = []
         current_rel_parts = []
         current_tail_parts = []
-        current_lbl_parts = []
-        last_null = None
-
         entity_list = []
         entity_dict = {}
-        rejected = []
 
         def flush_current_state():
-            nonlocal state, last_null
             if state in {"ENT_TEXT", "ENT_TYPE"}:
                 if current_ent_text:
                     ent_text = " ".join(current_ent_text)
@@ -206,12 +217,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     })
                     current_rel_parts.clear()
                     current_tail_parts.clear()
-            elif state == "NULL":
-                if current_lbl_parts:
-                    label_str = " ".join(current_lbl_parts)
-                    if label_str:
-                        rejected.append({"kind": last_null or "rel", "label": label_str})
-                    current_lbl_parts.clear()
 
         i = 0
         while i < len(tokens):
@@ -238,13 +243,9 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     pass
                 i += 1
             elif t == tok.rel:
-                if state == "NULL":
-                    flush_current_state()
-                    last_null = "rel"
-                else:
-                    flush_current_state()
-                    state = "REL"
-                    current_rel_parts.clear()
+                flush_current_state()
+                state = "REL"
+                current_rel_parts.clear()
                 i += 1
             elif t == tok.tail:
                 state = "TAIL"
@@ -254,12 +255,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                 flush_current_state()
                 state = "REL"
                 current_rel_parts.clear()
-                i += 1
-            elif t == tok.null:
-                flush_current_state()
-                state = "NULL"
-                last_null = None
-                current_lbl_parts.clear()
                 i += 1
             else:
                 if state == "ENT_TEXT":
@@ -272,8 +267,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     current_rel_parts.append(t)
                 elif state == "TAIL":
                     current_tail_parts.append(t)
-                elif state == "NULL":
-                    current_lbl_parts.append(t)
                 i += 1
 
         flush_current_state()
@@ -282,12 +275,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
     if tok.variant in {"re", "boundary_re"}:
         entities: List[EntityBlock] = []
         entity_dict: Dict[str, EntityBlock] = {}
-        rejected: List[RejectedItem] = []
-        
-        # Tokenize the entire text using special tokens
-        special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
-        pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
-        tokens = [t.strip() for t in pattern.split(text) if t.strip()]
         
         state = "IDLE"
         current_head_text = []
@@ -295,7 +282,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
         current_rel_type = []
         current_tail_text = []
         current_tail_type = []
-        current_lbl_parts = []
         
         def flush_triplet():
             nonlocal current_head_text, current_head_type, current_rel_type, current_tail_text, current_tail_type
@@ -322,25 +308,15 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
             current_tail_text.clear()
             current_tail_type.clear()
             
-        def flush_null():
-            nonlocal current_lbl_parts
-            if current_lbl_parts:
-                lbl = " ".join(current_lbl_parts).strip()
-                if lbl:
-                    rejected.append({"kind": "rel", "label": lbl})
-                current_lbl_parts.clear()
-
         i = 0
         while i < len(tokens):
             t = tokens[i]
             if t == tok.head:
-                flush_null()
                 flush_triplet()
                 current_head_text.clear()
                 current_head_type.clear()
                 state = "HEAD_TEXT"
             elif t == getattr(tok, "nest", None):
-                flush_null()
                 flush_triplet()
                 state = "REL"
                 current_rel_type.clear()
@@ -350,15 +326,9 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                 elif state == "TAIL_TEXT":
                     state = "TAIL_TYPE"
             elif t == tok.rel:
-                flush_null()
                 state = "REL"
             elif t == tok.tail:
-                flush_null()
                 state = "TAIL_TEXT"
-            elif t == tok.null:
-                flush_triplet()
-                flush_null()
-                state = "NULL"
             else:
                 if state == "HEAD_TEXT":
                     current_head_text.append(t)
@@ -370,12 +340,9 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     current_tail_text.append(t)
                 elif state == "TAIL_TYPE":
                     current_tail_type.append(t)
-                elif state == "NULL":
-                    current_lbl_parts.append(t)
             i += 1
             
         flush_triplet()
-        flush_null()
         return _deduplicate_entities(entities), rejected
 
     return [], []
@@ -392,18 +359,17 @@ def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -
     return [(ent["text"], rel["type"], rel["tail"]) for ent in entities for rel in ent["relations"]]
 
 
-def _append_null_block(
-        parts: List[str], 
-        tok: AnyTokens, 
+def build_rejection_string(
         ent_types: List[str], 
         rel_types: List[str], 
         random_sel: bool
-    ) -> None:
+    ) -> str:
     e_types = random.sample(ent_types, len(ent_types)) if random_sel else sorted(ent_types)
     r_types = random.sample(rel_types, len(rel_types)) if random_sel else sorted(rel_types)
     
-    null_parts = [f"{tok.null} {t}" for t in e_types] + [f"{tok.null} {r}" for r in r_types]
-    parts.extend(null_parts)
+    ent_str = ", ".join(e_types)
+    rel_str = ", ".join(r_types)
+    return f"\nMISSING ENTITIES: {ent_str}\nMISSING RELATIONS: {rel_str}"
 
 
 def _deduplicate_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
