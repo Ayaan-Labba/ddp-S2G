@@ -87,8 +87,8 @@ def add_special_tokens_to_tokenizer(
                 tokens.type_:     "type: ",
                 tokens.ner:       "find type: ",
                 tokens.re:        "find relation: ",
-                tokens.text:      "in the text: ",
-                tokens.nest:      "the same subject",
+                tokens.text:      "text: ",
+                tokens.nest:      "the same subject has relation: ",
                 tokens.ent_start: "entity: ",
                 tokens.null:      "not found: ",
             }

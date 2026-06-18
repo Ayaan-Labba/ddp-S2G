@@ -96,7 +96,7 @@ def build_joint_encoder_input(
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         ent_types_str = ", ".join(f"{e}" for e in ent_types)
         r_types_str = ", ".join(f"{r}" for r in r_types)
-        return f"Extract all entities of type [{ent_types_str}] and find relations of type [{r_types_str}] among the extracted entities in the given text. Text: {text}"
+        return f"Extract all entities of type [{ent_types_str}] and find relations of type [{r_types_str}] among the extracted entities. \n\n Text: {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
