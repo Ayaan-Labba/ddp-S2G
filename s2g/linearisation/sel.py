@@ -93,12 +93,12 @@ def build_sel(
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, ent['text'], tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                     else:
-                        extract_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                 else:  # boundary_re
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                     else:
-                        extract_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
+                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
 
         if extract_parts:
             parts.append(" ".join(extract_parts))
@@ -137,7 +137,7 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
-                    ent_triplet.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
         if triplet_parts:
@@ -250,6 +250,11 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                 state = "TAIL"
                 current_tail_parts.clear()
                 i += 1
+            elif t == getattr(tok, "nest", None):
+                flush_current_state()
+                state = "REL"
+                current_rel_parts.clear()
+                i += 1
             elif t == tok.null:
                 flush_current_state()
                 state = "NULL"
@@ -334,6 +339,11 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                 current_head_text.clear()
                 current_head_type.clear()
                 state = "HEAD_TEXT"
+            elif t == getattr(tok, "nest", None):
+                flush_null()
+                flush_triplet()
+                state = "REL"
+                current_rel_type.clear()
             elif t == tok.type_:
                 if state == "HEAD_TEXT":
                     state = "HEAD_TYPE"
@@ -341,8 +351,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     state = "TAIL_TYPE"
             elif t == tok.rel:
                 flush_null()
-                if state in {"TAIL_TEXT", "TAIL_TYPE"}:
-                    flush_triplet()
                 state = "REL"
             elif t == tok.tail:
                 flush_null()

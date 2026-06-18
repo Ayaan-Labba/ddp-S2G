@@ -103,6 +103,7 @@ class FSMState(Enum):
     END = auto()
     ENT_DECL_SPAN = auto()
     TRIPLET_HEAD_SPAN = auto()
+    NEST = auto()
 
 
 @dataclass
@@ -265,7 +266,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 tail_type_sentinel = {self.re_triplet_end_seq[0], self.re_next_triplet_start_seq[0]}
             else:
                 ent_type_sentinel = {self.ent_start_id, self.head_id, self.null_id, self.eos_id}
-                tail_type_sentinel = {self.rel_id, self.head_id, self.null_id, self.eos_id}
+                tail_type_sentinel = {self.nest_id, self.head_id, self.null_id, self.eos_id}
 
             if task in {"re", "boundary_re"}:
                 rel_sentinel = {self.re_element_sep_seq[0]}
@@ -343,6 +344,10 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             elif token_id == self.null_id:
                 state.fsm_state = FSMState.NULL_LABEL
                 state.label_prefix.clear()
+            elif token_id == self.nest_id:
+                state.fsm_state = FSMState.REL_LABEL
+                state.span_tokens.clear()
+                state.label_prefix.clear()
             elif token_id == self.rel_id:
                 state.fsm_state = FSMState.REL_LABEL
                 state.span_tokens.clear()
@@ -386,6 +391,8 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
             elif token_id == self.tail_id: 
                 state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
+            elif token_id == self.nest_id:
+                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
             elif token_id == self.null_id: 
                 state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
             else:
@@ -415,11 +422,11 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.type_id} if task == "re" else ({self.rel_id, self.head_id, self.null_id, self.eos_id})
+                exits = {self.type_id} if task == "re" else ({self.nest_id, self.head_id, self.null_id, self.eos_id})
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_TYPE_LABEL:
-                sentinels = {self.rel_id, self.head_id, self.null_id, self.eos_id}
+                sentinels = {self.nest_id, self.head_id, self.null_id, self.eos_id}
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
             if state.fsm_state == FSMState.NULL_LABEL:
@@ -451,7 +458,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 return self._rel_tries[b_idx].get_valid_next(state.label_prefix) if self._rel_tries[b_idx] else frozenset({self.tail_id, self.eos_id})
                 
             if state.fsm_state == FSMState.TAIL_SPAN:
-                exits = {self.rel_id, self.head_id, self.null_id, self.eos_id}
+                exits = {self.nest_id, self.head_id, self.null_id, self.eos_id}
                 return frozenset(self._source_copy_next(b_idx, state.span_tokens) | exits) or frozenset({self.eos_id})
                 
             if state.fsm_state == FSMState.NULL_LABEL:
