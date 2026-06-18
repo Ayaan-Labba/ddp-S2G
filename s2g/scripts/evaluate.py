@@ -114,7 +114,7 @@ def _evaluate_pipeline(model, tokenizer, instances, entity_schema, rel_schema, t
         
     if use_re:
         g_quints = [[(r["head"]["text"], r["head"].get("type",""), r["type"], r["tail"]["text"], r["tail"].get("type","")) for r in inst["relations"]] for inst in instances]
-        m.update(compute_metrics_for_task("re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], ner_maps[i].get(e["text"], ""), rel["type"], rel["tail"], ner_maps[i].get(rel["tail"], "")) for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
+        m.update(compute_metrics_for_task("re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances], all_pred_quintuples=[[(e["text"], e.get("type") or "", rel["type"], rel["tail"], rel.get("tail_type") or "") for e in r_per_inst[i] for rel in e["relations"]] for i in range(len(instances))], all_gold_quintuples=g_quints))
 
     if use_boundary_re:
         m.update(compute_metrics_for_task("boundary_re", rel_schema=rel_schema, all_pred_triplets=[extract_triplets(r) for r in r_per_inst], all_gold_triplets=[[(r["head"]["text"], r["type"], r["tail"]["text"]) for r in inst["relations"]] for inst in instances]))
