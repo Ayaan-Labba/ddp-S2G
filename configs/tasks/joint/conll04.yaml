@@ -45,18 +45,18 @@ scheduler:
 
 train:
   max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32
-  batch_size: 16                     
-  gradient_acc_steps: 2              
+  batch_size: 8                     
+  gradient_acc_steps: 4              
   gradient_clip_value: 1.0
   gradient_checkpointing: False      
-  precision: "bf16"
+  precision: "fp32"
   seed: 0
 
 validation:
   check_interval: 29               # Validate once per epoch
   percent_check: 1.0
   train_eval_percent_check: 0.25
-  batch_size: 256
+  batch_size: 128
   early_stopping_patience: 20
   early_stopping_metric: strict_f1
 

@@ -56,18 +56,8 @@ def main() -> None:
     
     train_eval_dataset = Subset(train_dataset, np.random.default_rng(cfg.train.seed).choice(len(train_dataset), size=max(1, int(len(train_dataset) * cfg.validation.train_eval_percent_check)), replace=False).tolist()) if cfg.validation.train_eval_percent_check else None
 
-    precision_to_dtype = {
-        "fp32": torch.float32,
-        "bf16": torch.bfloat16,
-        "fp16": torch.float16
-    }
-    dtype = precision_to_dtype.get(cfg.train.precision, torch.float32)
-
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        cfg.model.pretrained_checkpoint or cfg.model.name,
-        torch_dtype=dtype
-    )
+    model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
 
     tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.sel.use_rejection)
     warm_start = cfg.sel.warm_start and (cfg.model.pretrained_checkpoint is None)
