@@ -103,6 +103,7 @@ class FSMState(Enum):
     END = auto()
     ENT_DECL_SPAN = auto()
     TRIPLET_HEAD_SPAN = auto()
+    NEST = auto()
 
 
 @dataclass
@@ -344,8 +345,11 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 state.span_tokens.clear()
                 state.label_prefix.clear()
             elif token_id == self.nest_id:
-                state.fsm_state = FSMState.REL_LABEL
-                state.label_prefix.clear()
+                state.fsm_state = FSMState.NEST
+            elif state.fsm_state == FSMState.NEST:
+                if token_id == self.rel_id:
+                    state.fsm_state = FSMState.REL_LABEL
+                    state.label_prefix.clear()
             elif state.fsm_state == FSMState.TRIPLET_HEAD_SPAN:
                 if task == "re" and token_id == self.type_id:
                     state.fsm_state = FSMState.TYPE_LABEL
@@ -407,7 +411,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
             elif token_id == self.tail_id: 
                 state.fsm_state, state.span_tokens = FSMState.TAIL_SPAN, []
             elif token_id == self.nest_id:
-                state.fsm_state, state.span_tokens, state.label_prefix = FSMState.REL_LABEL, [], []
+                state.fsm_state = FSMState.NEST
             elif token_id == self.null_id: 
                 state.fsm_state, state.label_prefix = FSMState.NULL_LABEL, []
             else:
@@ -444,6 +448,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 sentinels = {self.nest_id, self.head_id, self.eos_id} | self.missing_start_ids
                 return self._tail_type_tries[b_idx].get_valid_next(state.label_prefix) if self._tail_type_tries[b_idx] else frozenset(sentinels)
                 
+            if state.fsm_state == FSMState.NEST:
+                return frozenset({self.rel_id})
+
             if state.fsm_state == FSMState.END:
                 return frozenset({self.eos_id})
                 
@@ -474,6 +481,9 @@ class ConstraintDecodingProcessor(LogitsProcessor):
                 
             if state.fsm_state == FSMState.NULL_LABEL:
                 return self._null_tries[b_idx].get_valid_next(state.label_prefix)
+
+            if state.fsm_state == FSMState.NEST:
+                return frozenset({self.rel_id})
 
             return frozenset({self.eos_id, self.pad_id})
 

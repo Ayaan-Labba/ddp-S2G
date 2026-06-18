@@ -118,12 +118,12 @@ def build_sel(
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, head_text, tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                     else:
-                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                        extract_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                 else:  # boundary_re
                     if i == 0 or not use_nesting:
                         extract_parts.extend([tok.head, head_text, tok.rel, rel['type'], tok.tail, rel['tail']])
                     else:
-                        extract_parts.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
+                        extract_parts.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
 
         analysis_str = " . ".join(analysis_parts)
         extract_str = " ".join(extract_parts)
@@ -165,7 +165,7 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
-                    ent_triplet.extend([tok.nest, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
         if triplet_parts:
