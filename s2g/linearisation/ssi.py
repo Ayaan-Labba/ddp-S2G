@@ -50,17 +50,9 @@ def build_re_encoder_input(
     if ssi_prompt == "natural":
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         e_types = random.sample(entity_types, len(entity_types)) if random_order else sorted(entity_types)
-        instructions = "Instructions: 1. Write a summary mapping out every connection found. 2. Convert that summary into structured relation triplets."
-        if getattr(tok, "use_rejection", False):
-            instructions += " 3. Identify which of the allowed relation types are missing from the text."
-        return (
-            f"Task: Analyze the text to identify domain entities and their interactions based on the allowed schema.\n\n"
-            f"Allowed Relation Types: {r_types}\n"
-            f"Allowed Entity Types: {e_types}\n\n"
-            f"Text: \"{text}\"\n\n"
-            f"{instructions}\n\n"
-            f"Output:"
-        )
+        r_types_str = ", ".join(f"{r}" for r in r_types)
+        e_types_str = ", ".join(f"{e}" for e in e_types)
+        return f"Extract all relations of type [{r_types_str}] among the entities of type [{e_types_str}] in the given text. Text: {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -76,16 +68,8 @@ def build_boundary_re_encoder_input(
 ) -> str:
     if ssi_prompt == "natural":
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
-        instructions = "Instructions: 1. Write a summary mapping out every connection found. 2. Convert that summary into structured relation triplets."
-        if getattr(tok, "use_rejection", False):
-            instructions += " 3. Identify which of the allowed relation types are missing from the text."
-        return (
-            f"Task: Analyze the text to identify entities and their interactions based on the allowed schema.\n\n"
-            f"Allowed Relation Types: {r_types}\n\n"
-            f"Text: \"{text}\"\n\n"
-            f"{instructions}\n\n"
-            f"Output:"
-        )
+        r_types_str = ", ".join(f"{r}" for r in r_types)
+        return f"Extract all relations of type [{r_types_str}] among the entities in the given text. Text: {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -97,7 +81,7 @@ def build_boundary_joint_encoder_input(rel_types: List[str], text: str, random_o
     if ssi_prompt == "natural":
         types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         r_types_str = ", ".join(f"{r}" for r in types)
-        return f"List all entities and relations [{r_types_str}]: {text}"
+        return f"Extract all entities and find relations of type [{r_types_str}] among the extracted entities in the given text. Text: {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
@@ -112,7 +96,7 @@ def build_joint_encoder_input(
         r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
         ent_types_str = ", ".join(f"{e}" for e in ent_types)
         r_types_str = ", ".join(f"{r}" for r in r_types)
-        return f"List all entities of type [{ent_types_str}] and relations of type [{r_types_str}]: {text}"
+        return f"Extract all entities of type [{ent_types_str}] and find relations of type [{r_types_str}] among the extracted entities in the given text. Text: {text}"
     elif ssi_prompt in {False, "false", "False"}:
         return text
     else:
