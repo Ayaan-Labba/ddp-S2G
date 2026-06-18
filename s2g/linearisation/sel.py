@@ -78,8 +78,7 @@ def build_sel(
         random.shuffle(blocks)
 
     if task in {"re", "boundary_re"}:
-        rel_map = rel_map or {}
-        analysis_parts = []
+        parts = []
         extract_parts = []
 
         for ent in blocks:
@@ -89,57 +88,30 @@ def build_sel(
             if not rels:
                 continue
 
-            # --- SUMMARY ---
-            head_text = ent['text']
-            ent_analysis = []
-            if task == "re":
-                head_type = ent.get('type') or ''
-                ent_analysis.append(f"{head_text} [{head_type}]")
-                rel_str_list = []
-                for rel in rels:
-                    rel_expanded = rel_map.get(rel['type'], rel['type'])
-                    tail_text = rel['tail']
-                    tail_type = rel.get('tail_type') or ''
-                    rel_str_list.append(f"{rel_expanded} {tail_text} [{tail_type}]")
-            else:  # boundary_re
-                ent_analysis.append(head_text)
-                rel_str_list = []
-                for rel in rels:
-                    rel_expanded = rel_map.get(rel['type'], rel['type'])
-                    tail_text = rel['tail']
-                    rel_str_list.append(f"{rel_expanded} {tail_text}")
-            
-            ent_analysis.append(" ; ".join(rel_str_list))
-            analysis_parts.append(" ".join(ent_analysis))
-
-            # --- TRIPLETS ---
             for i, rel in enumerate(rels):
                 if task == "re":
                     if i == 0 or not use_nesting:
-                        extract_parts.extend([tok.head, head_text, tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                        extract_parts.extend([tok.head, ent['text'], tok.type_, ent.get('type') or '', tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                     else:
-                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
+                        extract_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail'], tok.type_, rel.get('tail_type') or ''])
                 else:  # boundary_re
                     if i == 0 or not use_nesting:
-                        extract_parts.extend([tok.head, head_text, tok.rel, rel['type'], tok.tail, rel['tail']])
+                        extract_parts.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                     else:
-                        extract_parts.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                        extract_parts.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
 
-        analysis_str = " . ".join(analysis_parts)
-        extract_str = " ".join(extract_parts)
+        if extract_parts:
+            parts.append(" ".join(extract_parts))
 
-        if use_rejection and rejected_rel_types:
-            r_types = random.sample(rejected_rel_types, len(rejected_rel_types)) if random_sel else sorted(rejected_rel_types)
-            missing_str = " , ".join(f"'{r}'" for r in r_types)
-        else:
-            missing_str = ""
-
-        parts = []
-        parts.append(f"SUMMARY: {analysis_str}" if analysis_str else "SUMMARY:")
-        parts.append(f"TRIPLETS: {extract_str}" if extract_str else "TRIPLETS:")
         if use_rejection:
-            parts.append(f"MISSING: {missing_str}" if missing_str else "MISSING:")
+            _append_null_block(
+                parts, tok, 
+                ent_types=[],
+                rel_types=(rejected_rel_types or []) if task in {"boundary_re", "re"} else [],
+                random_sel=random_sel
+            )
         return " ".join(parts)
+
 
     if task in {"joint", "boundary_joint"}:
         parts = []
@@ -165,7 +137,7 @@ def build_sel(
                 if i == 0 or not use_nesting:
                     ent_triplet.extend([tok.head, ent['text'], tok.rel, rel['type'], tok.tail, rel['tail']])
                 else:
-                    ent_triplet.extend([tok.head, tok.nest, tok.rel, rel['type'], tok.tail, rel['tail']])
+                    ent_triplet.extend([tok.rel, rel['type'], tok.tail, rel['tail']])
             triplet_parts.append(" ".join(ent_triplet))
 
         if triplet_parts:
@@ -251,9 +223,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                 current_ent_type.clear()
                 i += 1
             elif t == getattr(tok, "head", None):
-                if i + 1 < len(tokens) and tokens[i+1] == getattr(tok, "nest", None):
-                    i += 1
-                    continue
                 flush_current_state()
                 state = "HEAD"
                 current_head_parts.clear()
@@ -280,11 +249,6 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
             elif t == tok.tail:
                 state = "TAIL"
                 current_tail_parts.clear()
-                i += 1
-            elif t == getattr(tok, "nest", None):
-                flush_current_state()
-                state = "REL"
-                current_rel_parts.clear()
                 i += 1
             elif t == tok.null:
                 flush_current_state()
@@ -315,18 +279,10 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
         entity_dict: Dict[str, EntityBlock] = {}
         rejected: List[RejectedItem] = []
         
-        # Extract only the TRIPLETS: portion of the text
-        if "TRIPLETS:" in text:
-            extract_part = text.split("TRIPLETS:", 1)[1]
-            if "MISSING:" in extract_part:
-                extract_part = extract_part.split("MISSING:", 1)[0]
-        else:
-            extract_part = text
-            
-        # Tokenize the extract part using special tokens
+        # Tokenize the entire text using special tokens
         special_tokens = sorted(tok.all_tokens, key=len, reverse=True)
         pattern = re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
-        tokens = [t.strip() for t in pattern.split(extract_part) if t.strip()]
+        tokens = [t.strip() for t in pattern.split(text) if t.strip()]
         
         state = "IDLE"
         current_head_text = []
@@ -334,6 +290,7 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
         current_rel_type = []
         current_tail_text = []
         current_tail_type = []
+        current_lbl_parts = []
         
         def flush_triplet():
             nonlocal current_head_text, current_head_type, current_rel_type, current_tail_text, current_tail_type
@@ -360,30 +317,40 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
             current_tail_text.clear()
             current_tail_type.clear()
             
+        def flush_null():
+            nonlocal current_lbl_parts
+            if current_lbl_parts:
+                lbl = " ".join(current_lbl_parts).strip()
+                if lbl:
+                    rejected.append({"kind": "rel", "label": lbl})
+                current_lbl_parts.clear()
+
         i = 0
         while i < len(tokens):
             t = tokens[i]
             if t == tok.head:
-                if i + 1 < len(tokens) and tokens[i+1] == getattr(tok, "nest", None):
-                    i += 1
-                    continue
+                flush_null()
                 flush_triplet()
                 current_head_text.clear()
                 current_head_type.clear()
                 state = "HEAD_TEXT"
-            elif t == getattr(tok, "nest", None):
-                flush_triplet()
-                state = "REL"
-                current_rel_type.clear()
             elif t == tok.type_:
                 if state == "HEAD_TEXT":
                     state = "HEAD_TYPE"
                 elif state == "TAIL_TEXT":
                     state = "TAIL_TYPE"
             elif t == tok.rel:
+                flush_null()
+                if state in {"TAIL_TEXT", "TAIL_TYPE"}:
+                    flush_triplet()
                 state = "REL"
             elif t == tok.tail:
+                flush_null()
                 state = "TAIL_TEXT"
+            elif t == tok.null:
+                flush_triplet()
+                flush_null()
+                state = "NULL"
             else:
                 if state == "HEAD_TEXT":
                     current_head_text.append(t)
@@ -395,12 +362,16 @@ def parse_sel(text: str, tok: AnyTokens) -> Tuple[List[EntityBlock], List[Reject
                     current_tail_text.append(t)
                 elif state == "TAIL_TYPE":
                     current_tail_type.append(t)
+                elif state == "NULL":
+                    current_lbl_parts.append(t)
             i += 1
             
         flush_triplet()
+        flush_null()
         return _deduplicate_entities(entities), rejected
 
     return [], []
+
 
 
 def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Triplet]:
