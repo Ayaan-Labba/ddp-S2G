@@ -11,12 +11,14 @@ from typing import Dict, List, Tuple, Set
 
 import yaml
 
+
 logger = logging.getLogger(__name__)
 
 
 def load_label_maps(config_map_path: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     if not config_map_path:
         return {}, {}
+    
     path = Path(config_map_path)
     if not path.exists():
         logger.warning(f"Config map file {config_map_path} not found. Using raw labels.")
@@ -30,6 +32,7 @@ def load_label_maps(config_map_path: str) -> Tuple[Dict[str, str], Dict[str, str
 
     entities = config.get("entities", {}) or {}
     relations = config.get("relations", {}) or {}
+    
     return {str(k): str(v) for k, v in entities.items()}, {str(k): str(v) for k, v in relations.items()}
 
 

@@ -21,9 +21,10 @@ class ModelConfig:
     model_variant: str = "joint"
 
 @dataclass
-class TokenizationConfig:
+class TokenizerConfig:
     max_source_length: int = 400
     max_target_length: int = 200
+    warm_start: bool = False
 
 @dataclass
 class OptimizerConfig:
@@ -42,6 +43,7 @@ class SchedulerConfig:
 @dataclass
 class TrainConfig:
     max_steps: int = 20_000
+    steps_per_log: int = 100
     batch_size: int = 8
     gradient_acc_steps: int = 4
     gradient_clip_value: float = 10.0
@@ -60,86 +62,88 @@ class ValidationConfig:
 
 @dataclass
 class GenerationConfig:
-    num_beams: int = 4
+    num_beams: int = 3
     length_penalty: float = 0.0
     no_repeat_ngram_size: int = 0
     early_stopping: bool = False
     constraint_decoding: bool = False
 
 @dataclass
-class SSIConfig:
-    mode: str = "budget"
-    max_ent_types: Optional[int] = None
-    max_rel_types: Optional[int] = None
-    positive_rate_start: float = 0.9
-    positive_rate_end: float = 0.9
-    negative_rate_start: float = 0.1
-    negative_rate_end: float = 0.1
-    pos_max_start: int = 1
-    pos_max_end: int = 20
-    negative_max_start: int = 1
-    negative_max_end: int = 20
-    random_prompt: bool = False
-    ssi_prompt: str = "ssi"
+class EvaluationConfig:
+    split: str = "test"
+    batch_size: int = 32
+    evaluate_config: Optional[str] = None
 
 @dataclass
-class SELConfig:
-    random_sel: bool = False
+class PromptConfig:
+    mode: str = "budget"
+    type: str = "natural"
+    random_prompt: bool = False
+    max_ent_types: int = 10
+    max_rel_types: int = 10
+    positive_rate: float = 0.5
+    negative_rate: float = 0.5
+    positive_rate_start: Optional[float] = 0.9
+    positive_rate_end: Optional[float] = 0.5
+    negative_rate_start: Optional[float] = 0.1
+    negative_rate_end: Optional[float] = 0.5
+    pos_max_start: Optional[int] = 1
+    pos_max_end: Optional[int] = 10
+    negative_max_start: Optional[int] = 1
+    negative_max_end: Optional[int] = 10
+
+@dataclass
+class GraphConfig:
+    random_graph: bool = False
     use_rejection: bool = False
-    warm_start: bool = True
     use_nesting: bool = True
 
 @dataclass
 class CheckpointConfig:
     save_top_k: int = 3
-    every_n_steps: int = 500
+    every_n_steps: int = 1000
     resume_from: Optional[str] = None
 
 @dataclass
 class CallbacksConfig:
-    sample_generation_interval: int = 5_000
+    sample_generation_interval: int = 5000
 
 @dataclass
 class WandbConfig:
-    project: str = "s2g"
+    project: str = 's2g'
     entity: Optional[str] = None
     run_name: Optional[str] = None
 
 @dataclass
 class DataConfig:
     data_dir: Optional[str] = None
-    schema_file: Optional[str] = None
-    entity_schema_file: Optional[str] = None
+    rel_schema: Optional[str] = None
+    ent_schema: Optional[str] = None
     output_dir: Optional[str] = None
 
 @dataclass
 class HardwareConfig:
     num_workers: int = 0
-    persistent_workers: bool = False
+    persistent_workers: bool = True
     gpu_ids: Optional[List[int]] = None
 
 @dataclass
-class EvaluationConfig:
-    split: str = "test"
-    evaluate_config: Optional[str] = None
-
-@dataclass
 class S2GConfig:
+    data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    tokenization: TokenizationConfig = field(default_factory=TokenizationConfig)
+    tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
-    ssi: SSIConfig = field(default_factory=SSIConfig)
-    sel: SELConfig = field(default_factory=SELConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    prompt: PromptConfig = field(default_factory=PromptConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     callbacks: CallbacksConfig = field(default_factory=CallbacksConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
-    data: DataConfig = field(default_factory=DataConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
-    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     config_path: Optional[str] = None
 
 

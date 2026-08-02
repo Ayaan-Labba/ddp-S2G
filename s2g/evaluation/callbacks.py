@@ -10,47 +10,46 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
-from transformers import EarlyStoppingCallback, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+import wandb
+from transformers import EarlyStoppingCallback, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState
 
-from s2g.linearisation import S2GTokens, AnyTokens, extract_triplets, parse_sel
+from s2g.linearisation import extract_triplets, parse_graph
 
 logger = logging.getLogger(__name__)
-
-_TASK_TO_KEY = {
-    "re": "re",
-    "boundary_re": "boundary_re",
-    "boundary_joint": "boundary_joint",
-    "joint": "joint",
-}
 
 
 class StepTrackingCallback(TrainerCallback):
     def __init__(self, collator: Any) -> None: 
         self.collator = collator
         
-    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: Any) -> None:
+    def on_step_end(self, state: TrainerState) -> None:
         self.collator.current_step = state.global_step
 
 
 class GenerateTextSamplesCallback(TrainerCallback):
     def __init__(
-        self, tokenizer: PreTrainedTokenizerBase, sample_batch: List[Dict], collator: Any, task: str,
-        interval: int = 10_000, eval_beams: int = 3, max_target_length: int = 150,
+        self, 
+        tokenizer: PreTrainedTokenizerBase, 
+        sample_batch: List[Dict], 
+        collator: Any, 
+        variant: str,
+        interval: int = 10_000,
+        eval_beams: int = 3,
+        max_target_length: int = 150
     ) -> None:
-        if task not in _TASK_TO_KEY: 
-            raise ValueError(f"Unknown task {task!r}.")
+        if variant not in {'re', 'boundary_re', 'joint', 'boundary_joint'}: 
+            raise ValueError(f"Unknown variant {variant!r}.")
+
         self.tokenizer = tokenizer
         self.sample_batch = sample_batch
         self.collator = collator
-        self._task, self._task_key = task, _TASK_TO_KEY[task]
+        self._variant = variant
         self._tok = collator._tok
         self.interval, self.eval_beams, self.max_target_length, self._last_logged = interval, eval_beams, max_target_length, -1
 
-    def on_step_end(
-            self, args: TrainingArguments, state: TrainerState, control: TrainerControl, 
-            model: Optional[Any] = None, **kwargs: Any
-        ) -> None:
-        if not state.is_world_process_zero or state.global_step in {0, self._last_logged} or state.global_step % self.interval != 0: 
+    def on_step_end(self, state: TrainerState, model: Optional[Any] = None) -> None:
+        if not state.is_world_process_zero or \
+            state.global_step in {0, self._last_logged} or state.global_step % self.interval != 0: 
             return
             
         self._last_logged = state.global_step
@@ -63,7 +62,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         except Exception: 
             logger.exception("GenerateTextSamplesCallback failed at step %d.", state.global_step)
 
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: Optional[Any] = None, **kwargs: Any) -> None:
+    def on_train_begin(self, state: TrainerState, model: Optional[Any] = None) -> None:
         if not state.is_world_process_zero: 
             return
             
@@ -78,17 +77,13 @@ class GenerateTextSamplesCallback(TrainerCallback):
             logger.exception("GenerateTextSamplesCallback failed at train begin.")
 
     def _log_samples(self, model: Any, state: TrainerState, is_initial: bool = False) -> None:
-        try: 
-            import wandb
-        except ImportError: 
-            return
         if wandb.run is None: 
             return
 
         batch = self.collator(self.sample_batch)
         device = next(model.parameters()).device
-        k, dtype = self._task_key, next(model.parameters()).dtype
-        
+        k, dtype = self._variant, next(model.parameters()).dtype
+
         input_ids = batch[f"{k}_input_ids"].to(device, non_blocking=True)
         attn_mask = batch[f"{k}_attention_mask"].to(device, non_blocking=True)
         labels = batch[f"{k}_labels"].to(device, non_blocking=True)
@@ -101,6 +96,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
                 input_ids=input_ids, attention_mask=attn_mask, num_beams=self.eval_beams, max_length=self.max_target_length,
                 length_penalty=0.0, no_repeat_ngram_size=0, early_stopping=False,
             )
+
         model.train()
 
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
@@ -119,10 +115,12 @@ class GenerateTextSamplesCallback(TrainerCallback):
         rows = []
         
         cols = ["Source", "Encoder Input"]
-        if self._task in {"joint", "boundary_joint"}:
+        if self._variant in {"joint", "boundary_joint"}:
             cols.extend(["Predicted Entities", "Gold Entities"])
-        if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
+
+        if self._variant in {"re", "boundary_re", "joint", "boundary_joint"}:
             cols.extend(["Predicted Triplets", "Gold Triplets"])
+
         cols.extend(["Predicted SEL", "Gold SEL"])
         
         for i, inst in enumerate(self.sample_batch):
@@ -135,32 +133,37 @@ class GenerateTextSamplesCallback(TrainerCallback):
             p_sel = " ".join(p_sel.split())
             g_sel = " ".join(g_sel.split())
             
-            p_ent, _ = parse_sel(p_sel, tok=self._tok)
-            g_ent, _ = parse_sel(g_sel, tok=self._tok)
+            p_ent, _ = parse_graph(p_sel, tok=self._tok)
+            g_ent, _ = parse_graph(g_sel, tok=self._tok)
 
             row = [inst["text"], prompts[i]]
             
-            if self._task in {"joint", "boundary_joint"}:
-                p_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in p_ent]) if p_ent else "(none)"
-                g_e = "\n".join([f"{e['text']} [{e.get('type') or '?'}]" for e in g_ent]) if g_ent else "(none)"
-                row.extend([p_e, g_e])
-
-
-            if self._task in {"re", "boundary_re", "joint", "boundary_joint"}:
-                p_triplets = extract_triplets(p_ent, include_types=(self._task == "re"))
-                g_triplets = extract_triplets(g_ent, include_types=(self._task == "re"))
+            if self._variant in {"joint", "re"}:
+                p_e = "\n".join([f"{e['text']} [{e.get('type')}]" for e in p_ent]) if p_ent else "(none)"
+                g_e = "\n".join([f"{e['text']} [{e.get('type') }]" for e in g_ent]) if g_ent else "(none)"
+                p_triplets = extract_triplets(p_ent, include_types=True)
+                g_triplets = extract_triplets(g_ent, include_types=True)
                 p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
                 g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
-                row.extend([p_t, g_t])
+                row.extend([p_e, g_e, p_t, g_t])
+
+            if self._variant in {"boundary_re", "boundary_joint"}:
+                p_e = "\n".join([f"{e['text']}" for e in p_ent]) if p_ent else "(none)"
+                g_e = "\n".join([f"{e['text']}" for e in g_ent]) if g_ent else "(none)"
+                p_triplets = extract_triplets(p_ent, include_types=False)
+                g_triplets = extract_triplets(g_ent, include_types=False)
+                p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
+                g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
+                row.extend([p_e, g_e, p_t, g_t])
                 
             row.extend([p_sel, g_sel])
             rows.append(row)
 
         wandb.log(
-            {f"samples/{self._task}": wandb.Table(columns=cols, data=rows)}, 
+            {f"samples/{self._variant}": wandb.Table(columns=cols, data=rows)}, 
             step=0 if is_initial else state.global_step
         )
-        logger.info("Logged %d %s samples to W&B at step %d.", len(rows), self._task, 0 if is_initial else state.global_step)
+        logger.info("Logged %d %s samples to W&B at step %d.", len(rows), self._variant, 0 if is_initial else state.global_step)
 
 
 class PeriodicCheckpointCallback(TrainerCallback):
@@ -170,7 +173,7 @@ class PeriodicCheckpointCallback(TrainerCallback):
         self.wandb_run_id = wandb_run_id
         self._last_saved = -1
 
-    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs: Any) -> None:
+    def on_step_end(self, state: TrainerState, control: TrainerControl) -> None:
         if state.global_step in {0, self._last_saved} or state.global_step % self.every_n_steps != 0: 
             return
             
@@ -181,9 +184,6 @@ class PeriodicCheckpointCallback(TrainerCallback):
             m_path.parent.mkdir(parents=True, exist_ok=True)
             with open(m_path, "w", encoding="utf-8") as f: 
                 json.dump({"wandb_run_id": self.wandb_run_id, "last_step": state.global_step}, f, indent=2)
-
-
-
 
 
 def load_run_metadata(output_dir: str) -> Optional[Dict[str, Any]]:

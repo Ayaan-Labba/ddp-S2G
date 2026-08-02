@@ -5,12 +5,9 @@ from __future__ import annotations
 
 import logging
 import mmap
+import json
 from pathlib import Path
 from typing import Optional, Union
-try:
-    import orjson as json
-except ImportError:
-    import json
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -71,7 +68,7 @@ def _open_mmap(filepath: Path) -> tuple[object, mmap.mmap]:
 
 
 def _build_offset_index(filepath: Path) -> np.ndarray:
-    """Vectorized offset indexer - runs 10-100x faster than looping over newline bytes."""
+    """Vectorized offset indexer."""
     starts, ends = [], []
     chunk_base, line_start = 0, 0
 
