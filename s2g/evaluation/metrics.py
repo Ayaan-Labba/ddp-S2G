@@ -12,15 +12,13 @@ only loops over known relation_types and ignores everything else.
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from s2g.linearisation import VALID_VARIANTS
+
 Triplet = Tuple[str, str, str]              # (head_text, rel_type, tail_text)
 Quintuple = Tuple[str, str, str, str, str]  # (head, head_type, rel, tail, tail_type)
 EntityMention = Tuple[str, str]             # (span_text, entity_type)
 EntityBlock = Dict[str, Any]
 
-
-# ---------------------------------------------------------------------------
-# Extraction Helpers
-# ---------------------------------------------------------------------------
 
 def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[str], List[EntityMention]]:
     """
@@ -59,11 +57,7 @@ def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[
     return triplets, quintuples, entities, mentions
 
 
-# ---------------------------------------------------------------------------
-# Low-level PRF helpers
-# ---------------------------------------------------------------------------
-
-def _corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefix: str) -> Dict[str, float]:
+def corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefix: str) -> Dict[str, float]:
     """
     Corpus-level (micro) PRF — accumulates TP/FP/FN across all sentences.
     """
@@ -77,10 +71,10 @@ def _corpus_prf(all_predicted: List[List[Any]], all_gold: List[List[Any]], prefi
     p   = tp / p_len if p_len > 0 else 0.0
     r   = tp / g_len if g_len > 0 else 0.0
     f1  = (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
-    return {f"{prefix}_{k}": v for k, v in zip(["precision", "recall", "f1"], [p, r, f1])}
+    return {f"{prefix}_{k}": v for k, v in zip(['precision', 'recall', 'f1'], [p, r, f1])}
 
 
-def _per_type_macro(
+def per_type_macro(
     all_predicted: List[List[Any]],
     all_gold: List[List[Any]],
     type_fn,
@@ -123,9 +117,6 @@ def _per_type_macro(
     }
 
 
-# ---------------------------------------------------------------------------
-# Top-level entry point
-# ---------------------------------------------------------------------------
 
 def compute_metrics_for_variant(
     variant: str,
@@ -134,7 +125,7 @@ def compute_metrics_for_variant(
     rel_schema: Optional[List[str]] = None,
     entity_schema: Optional[List[str]] = None,
 ) -> Dict[str, float]:
-    if variant not in {"re", "boundary_re", "boundary_joint", "joint"}:
+    if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
 
     # Single-pass extraction across all sentences
@@ -155,7 +146,7 @@ def compute_metrics_for_variant(
         all_gold_entities.append(e)
         all_gold_entity_mentions.append(m)
 
-    # Filter out-of-schema predictions (hallucinations)
+    # Filter out-of-schema predictions
     rel_set = set(rel_schema) if rel_schema else None
     ent_set = set(entity_schema) if entity_schema else None
 
@@ -171,30 +162,30 @@ def compute_metrics_for_variant(
 
     # Entity boundary
     if variant in {'boundary_joint', 'boundary_re', 're', 'joint'}:
-        m.update(_corpus_prf(all_pred_entities, all_gold_entities, 'ner_boundary'))
+        m.update(corpus_prf(all_pred_entities, all_gold_entities, 'ner_boundary'))
 
     # Entity strict
     if variant in {'joint', 're'}:
         if entity_schema is None:
             raise ValueError(f"'entity_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(_corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(_per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], entity_schema, "ner"))
+        m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], entity_schema, "ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(_corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
-        m.update(_per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
+        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(_corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
-        m.update(_per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
+        m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
+        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
 
     return m

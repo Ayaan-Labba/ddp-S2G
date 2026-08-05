@@ -1,5 +1,5 @@
 # Environment
-s2g_env/
+s2g-env/
 *__pycache__/
 .vscode/
 slurm_shells/

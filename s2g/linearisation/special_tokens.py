@@ -3,12 +3,12 @@ Special token registry for the S2G model.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from transformers import AutoModel, AutoTokenizer
 import torch
 
-# All token names that carry a token string
+# All linearisation token names
 ALL_TOKEN_NAMES: List[str] = [
     'ner', 're', 'text', 
     'ent', 'e_type',
@@ -16,8 +16,10 @@ ALL_TOKEN_NAMES: List[str] = [
     'null'
 ]
 
+VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
 class S2GTokens:
+    # Token string mappings for each linearisation token
     token_strs = {
         'ner':      '<extra_id_0>', 
         're':       '<extra_id_1>', 
@@ -31,6 +33,7 @@ class S2GTokens:
         'null':     '<extra_id_9>'
     }
 
+    # Token maps for each variant to get active tokens
     base_tok_map = {
         're':             {'head', 'e_type', 'r_type', 'nr_type', 'tail'},
         'boundary_re':    {'head', 'r_type', 'nr_type', 'tail'},
@@ -63,26 +66,27 @@ def add_special_tokens_to_tokenizer(
         tokenizer: AutoTokenizer, 
         tokens: S2GTokens, 
         model: Optional[AutoModel] = None, 
-        warm: bool = True,
+        warm_start: bool = True,
     ) -> int:
+    # Add special tokens to tokenizer and optionally warm start model embeddings
     num_added = tokenizer.add_special_tokens({'additional_special_tokens': tokens.all_tokens})
     if model is not None:
         if num_added > 0:
-            model.config.tie_word_embeddings = False
+            model.config.tie_word_embeddings = False # weights are untied for flan-t5 models
             model.resize_token_embeddings(len(tokenizer))
 
-        if warm:
+        if warm_start:
             token_init_phrases = {
-                'ner':      'Find type: ',
-                're':       'Find relation: ',
-                'text':     'Text: ',
-                'ent':      'Entity: ',
-                'e_type':   'Entity type: ',
-                'head':     'Subject: ',
-                'r_type':   'Relation: ',
-                'nr_type':  'Next Relation: ',
-                'tail':     'Object: ',
-                'null':     'Not found: ',
+                'ner':      'find entities: ',
+                're':       'find relations: ',
+                'text':     'text: ',
+                'ent':      'entity: ',
+                'e_type':   'entity type: ',
+                'head':     'subject: ',
+                'r_type':   'relation: ',
+                'nr_type':  'next relation: ',
+                'tail':     'object: ',
+                'null':     'not found: ',
             }
 
             with torch.no_grad():

@@ -5,21 +5,21 @@
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null       
-  model_variant: joint           
+  model_variant: re           
 
 data:
   data_dir: data/conll04
   schema_file: data/conll04/relation.schema
   entity_schema_file: data/conll04/entity.schema
-  output_dir: outputs/finetune/j-b-conll04-np3-ws
+  output_dir: outputs/finetune/r-b-conll04-np3
 
 evaluation:
-  evaluate_config: configs/tasks/joint/conll04_eval.yaml
+  evaluate_config: configs/tasks/re/conll04_eval_abl.yaml
 
 wandb:
   project: s2g
   entity: null
-  run_name: j-b-conll04-np3-ws
+  run_name: r-b-conll04-np3
 
 tokenization:
   max_source_length: 250
@@ -33,7 +33,7 @@ ssi:
 sel:
   random_sel: false
   use_rejection: false
-  warm_start: true
+  warm_start: false
   use_nesting: true
 
 optimizer:

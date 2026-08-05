@@ -9,8 +9,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Set, Tuple
 from collections import defaultdict
 
-from .special_tokens import S2GTokens
-
+from .special_tokens import S2GTokens, VALID_VARIANTS
 
 EntityBlock = Tuple[str, Any]
 Triplet = Tuple[str, str, str]
@@ -63,7 +62,7 @@ def build_graph(
         rejected_ent_types: List[str] = None, 
         rejected_rel_types: List[str] = None
     ) -> str:
-    if variant not in {'re', 'boundary_re', 'boundary_joint', 'joint'}:
+    if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
     
     if random_graph: 
@@ -187,13 +186,13 @@ def build_graph(
 
 
 @lru_cache(maxsize=16)
-def _get_compiled_special_token_pattern(tokens_tuple: Tuple[str, ...]) -> re.Pattern:
+def get_compiled_special_token_pattern(tokens_tuple: Tuple[str, ...]) -> re.Pattern:
     special_tokens = sorted(tokens_tuple, key=len, reverse=True)
     return re.compile(f"({'|'.join(map(re.escape, special_tokens))})")
 
 
 def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[List, List[RejectedItem]]:
-    pattern = _get_compiled_special_token_pattern(tuple(tok.all_tokens))
+    pattern = get_compiled_special_token_pattern(tuple(tok.all_tokens))
     tokens = [t.strip() for t in pattern.split(text) if t.strip()]
     
     entities: List[EntityBlock] = []
@@ -409,11 +408,11 @@ def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -
     if include_types:
         return [(
             f"{ent['text']} [{ent.get('type')}]", 
-            rel["type"], 
+            rel['type'], 
             f"{rel['tail']} [{rel.get('tail_type')}]"
-        ) for ent in entities for rel in ent["relations"]]
+        ) for ent in entities for rel in ent['relations']]
     
-    return [(ent["text"], rel["type"], rel["tail"]) for ent in entities for rel in ent["relations"]]
+    return [(ent['text'], rel['type'], rel['tail']) for ent in entities for rel in ent['relations']]
 
 
 def append_null_block(
@@ -438,5 +437,6 @@ def deduplicate_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
         else:
             seen[text_key] = len(deduped)
             deduped.append(ent)
+
     return deduped
 

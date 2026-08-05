@@ -35,7 +35,7 @@ def build_rel_ssi(rel_types: List[str], variant: str, random_order: bool = False
     return " ".join([f"{re_str} {t}" for t in types])
 
 
-def find_all_token_spans(source_tokens: List[str], span_text: str) -> List[Tuple[int, int]]:
+def find_all_token_spans(source_tokens: List[str], span_text: str) -> List[Tuple[int, int]]: # remove this function
     span_words = span_text.split()
     n = len(span_words)
     results = []
@@ -136,4 +136,4 @@ def build_boundary_joint_encoder_input(
     
     types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
     r_types_str = ", ".join(f"{r}" for r in types)
-    return f"Extract all entities and find relations of type [{r_types_str}] among the extracted entities in the given text. Text: {text}"
+    return f"Extract all entities and find relations of type [{r_types_str}] among the extracted entities. Text: {text}"

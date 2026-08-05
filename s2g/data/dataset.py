@@ -20,9 +20,9 @@ class S2GDataset(Dataset):
     def __init__(
             self, 
             filepath: Union[str, Path], 
-            subset_fraction: Optional[float] = None, 
-            seed: int = 0
-        ) -> None:
+            subset_fraction: Optional[float] = None,
+            seed: Optional[int] = 0
+    ) -> None:
         self._filepath = Path(filepath)
         if not self._filepath.exists(): 
             raise FileNotFoundError(f"Dataset file not found: {self._filepath}")
