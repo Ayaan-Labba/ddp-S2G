@@ -42,7 +42,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         sample_batch: List[Dict], 
         collator: S2GCollator, 
         interval: int = 1_000,
-        eval_beams: int = 3,
+        num_beams: int = 3,
         max_target_length: int = 256
     ) -> None:
         if variant not in {'re', 'boundary_re', 'joint', 'boundary_joint'}: 
@@ -54,7 +54,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         self.variant = variant
         self.tok = collator.tok
         self.interval = interval
-        self.eval_beams = eval_beams
+        self.num_beams = num_beams
         self.max_target_length =  max_target_length
         self.last_logged = -1
 
@@ -95,9 +95,9 @@ class GenerateTextSamplesCallback(TrainerCallback):
         device = next(model.parameters()).device
         k, dtype = self.variant, next(model.parameters()).dtype
 
-        input_ids = batch[f'{k}_input_ids'].to(device, non_blocking=True)
-        attn_mask = batch[f'{k}_attention_mask'].to(device, non_blocking=True)
-        labels = batch[f'{k}_labels'].to(device, non_blocking=True)
+        input_ids = batch['input_ids'].to(device, non_blocking=True)
+        attn_mask = batch['attention_mask'].to(device, non_blocking=True)
+        labels = batch['labels'].to(device, non_blocking=True)
 
         ctx = torch.autocast(device.type, dtype) \
         if dtype in {torch.bfloat16, torch.float16} and device.type == 'cuda' else contextlib.nullcontext()
@@ -105,7 +105,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         model.eval()
         with torch.inference_mode(), ctx:
             generated_ids = (model.module if hasattr(model, 'module') else model).generate( 
-                input_ids=input_ids, attention_mask=attn_mask, num_beams=self.eval_beams, max_length=self.max_target_length,
+                input_ids=input_ids, attention_mask=attn_mask, num_beams=self.num_beams, max_length=self.max_target_length,
                 length_penalty=0.0, no_repeat_ngram_size=0, early_stopping=False,
             ) # model.module for DDP
 

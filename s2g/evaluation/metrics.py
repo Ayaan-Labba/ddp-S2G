@@ -123,7 +123,7 @@ def compute_metrics_for_variant(
     all_pred_blocks: List[List[EntityBlock]],
     all_gold_blocks: List[List[EntityBlock]],
     rel_schema: Optional[List[str]] = None,
-    entity_schema: Optional[List[str]] = None,
+    ent_schema: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
@@ -148,7 +148,7 @@ def compute_metrics_for_variant(
 
     # Filter out-of-schema predictions
     rel_set = set(rel_schema) if rel_schema else None
-    ent_set = set(entity_schema) if entity_schema else None
+    ent_set = set(ent_schema) if ent_schema else None
 
     if rel_set is not None:
         all_pred_triplets = [[t for t in sent if t[1] in rel_set] for sent in all_pred_triplets]
@@ -166,11 +166,11 @@ def compute_metrics_for_variant(
 
     # Entity strict
     if variant in {'joint', 're'}:
-        if entity_schema is None:
-            raise ValueError(f"'entity_schema' must be provided for variant '{variant}' to get macro metrics.")
+        if ent_schema is None:
+            raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], entity_schema, "ner"))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, "ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:

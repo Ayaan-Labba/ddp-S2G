@@ -5,9 +5,9 @@
 model:
   name: google/flan-t5-large
   pretrained_checkpoint: null
-  model_variant: boundary_re
+  variant: boundary_re
 
-tokenization:
+tokenizer:
   max_source_length: 512
   max_target_length: 512            # Elevated target ceiling for long schema outputs
 
@@ -31,25 +31,29 @@ train:
   gradient_checkpointing: True
   precision: fp32
   seed: 0
+  warm_start: true
 
 validation:
   check_interval: 1750              
   percent_check: 1.0
-  train_eval_percent_check: 0.09
+  train_percent_check: 0.09
   batch_size: 64
   early_stopping_patience: 4
   early_stopping_metric: boundary_f1
 
 generation:
   num_beams: 1
-  length_penalty: 0.0
-  no_repeat_ngram_size: 0
-  early_stopping: false
   constraint_decoding: false
 
-ssi:
+prompt:
   mode: budget
+  type: natural
   random_prompt: false
+
+graph:
+  random_graph: false
+  use_rejection: false
+  use_nesting: true
 
 checkpoint:
   save_top_k: 3
@@ -62,19 +66,15 @@ callbacks:
 wandb:
   project: s2g
   entity: null
-  run_name: s2g-large-nyt
+  run_name: boundary-re-large-nyt
 
 data:
   data_dir: data/nyt
-  schema_file: data/nyt/relation.schema
-  entity_schema_file: data/nyt/entity.schema
-  output_dir: outputs/finetune/nyt
+  rel_schema: data/nyt/relation.schema
+  ent_schema: data/nyt/entity.schema
+  output_dir: outputs/finetune/boundary-re-large-nyt
 
 hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: null
-sel:
-  random_sel: false
-  use_rejection: false
-  warm_start: true

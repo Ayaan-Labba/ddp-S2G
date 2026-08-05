@@ -284,12 +284,12 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
 
-    tokens = S2GTokens(cfg.model.model_variant, use_rejection=cfg.graph.use_rejection)
-    warm_start = cfg.tokenizer.warm_start and (cfg.model.pretrained_checkpoint is None)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=warm_start)
+    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection)
+    warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=warm_start)
     model.to(device)
 
-    variant = cfg.model.model_variant
+    variant = cfg.model.variant
     pad_id = tokenizer.pad_token_id
     max_src = cfg.tokenizer.max_source_length
     max_tgt = cfg.tokenizer.max_target_length

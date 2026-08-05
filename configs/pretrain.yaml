@@ -15,13 +15,15 @@
 
 model:
   name: google/flan-t5-large        # Pre-trained Flan-T5 variant (60M params)
+  pretrained_checkpoint: null
+  variant: re
 
-tokenization:
+tokenizer:
   max_source_length: 300            # Encoder input budget (SSI + text)
   max_target_length: 300            # Decoder target budget (SEL)
 
 optimizer:
-  optim: adamw_torch                       # adamw_bnb_8bit (8-bit AdamW) to save memory
+  optim: adamw_torch                # adamw_bnb_8bit (8-bit AdamW) to save memory
   lr: 3e-5
   weight_decay: 0.0                 
   adam_beta1: 0.9
@@ -34,47 +36,51 @@ scheduler:
 
 train:
   max_steps: 240000
-  batch_size: 64                     # Per-device train batch size
+  batch_size: 64                    # Per-device train batch size
   gradient_checkpointing: true
-  gradient_acc_steps: 1             # Effective batch = 64
+  gradient_acc_steps: 1            # Effective batch = 64
   gradient_clip_value: 1.0
-  precision: bf16                   # "16" / "bf16" / "32"
+  precision: bf16                   # "fp16" / "bf16" / "fp32"
   seed: 0                           # Determines init, data shuffle, SSI sampling
+  warm_start: true
 
 validation:
-  check_interval: 6000               # Validate every N training steps
-  percent_check: 0.1                  # Fraction of val set used per check
-  train_eval_percent_check: 0.006     # Fraction of train set for periodic train metrics (null = disable)
-  batch_size: 128                      # May exceed train batch size
-  early_stopping_patience: 4          # In validation checks, not steps
+  check_interval: 6000              # Validate every N training steps
+  percent_check: 0.1                 # Fraction of val set used per check
+  train_percent_check: 0.006        # Fraction of train set for periodic train metrics (null = disable)
+  batch_size: 128                     # May exceed train batch size
+  early_stopping_patience: 4         # In validation checks, not steps
   early_stopping_metric: boundary_f1
 
 generation:                         
   num_beams: 1                      # Beam search at validation
-  length_penalty: 0.0               # No bias toward long sequences
-  no_repeat_ngram_size: 0           # Same span may recur legitimately
-  early_stopping: false             # Do not truncate triplets prematurely
   constraint_decoding: false        # Disabled during pre-training
 
-ssi:                                # Schema-Sensitive-Input dynamic construction
+prompt:
+  mode: bernoulli
+  type: ssi
+  random_prompt: false              # Shuffle SSI type order
   positive_rate_start: 1.0          # Bernoulli prob. for positives at step 0
   positive_rate_end: 1.0            # Bernoulli prob. for positives at step T
-  negative_rate_start: 1.0          # Bernoulli prob. for selected negatives at step 0
-  negative_rate_end: 1.0            # Bernoulli prob. for selected negatives at step T
+  neg_rate_start: 1.0               # Bernoulli prob. for selected negatives at step 0
+  neg_rate_end: 1.0                 # Bernoulli prob. for selected negatives at step T
   pos_max_start: 1
   pos_max_end: 20
-  negative_max_start: 30            # k(0): max negatives drawn from pool at training start
-  negative_max_end: 30              # k(T): max negatives drawn from pool at training end
-  random_prompt: false              # Shuffle SSI type order
-  ssi_prompt: ssi
+  neg_max_start: 30                 # k(0): max negatives drawn from pool at training start
+  neg_max_end: 30                   # k(T): max negatives drawn from pool at training end
+
+graph:
+  random_graph: false               # Shuffle SEL entity / relation order
+  use_rejection: false
+  use_nesting: true
 
 checkpoint:
   save_top_k: 3                     # Keep top-k checkpoints
-  every_n_steps: 6000                                          # Resumable safety-net checkpoints
+  every_n_steps: 6000               # Resumable safety-net checkpoints
   resume_from: outputs/pretrain-large-v1/checkpoint-66000      # Path to checkpoint dir; null = fresh start
 
 callbacks:
-  sample_generation_interval: 12000   # Log gold vs. predicted triplets every N
+  sample_generation_interval: 12000 # Log gold vs. predicted triplets every N
 
 wandb:
   project: ddp-vanilla-s2g
@@ -83,14 +89,11 @@ wandb:
 
 data:
   data_dir: data/rebel_full                       # Train / val / test JSONL files
-  schema_file: data/rebel_full/relation.schema    # One relation type per line
+  rel_schema: data/rebel_full/relation.schema     # One relation type per line
+  ent_schema: null
   output_dir: outputs/pretrain-large-v1           # Checkpoints, logs, predictions
 
 hardware:
   num_workers: 4                                    # DataLoader workers PER GPU
   persistent_workers: true                          # Avoid re-forking workers each epoch
   gpu_ids: null                                     # null = all available; e.g. [0, 1, 7]
-sel:
-  random_sel: false                 # Shuffle SEL entity / relation order
-  use_rejection: false
-  warm_start: true

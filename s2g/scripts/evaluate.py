@@ -14,7 +14,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 from s2g.data import S2GCollator, S2GDataset
 from s2g.evaluation import S2GEvaluator
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
-from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
+from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +33,29 @@ def main() -> None:
         raise ValueError("model.pretrained_checkpoint is required for evaluation.")
 
     ckpt_path = Path(ckpt)
-    variant_file = ckpt_path / "model_variant.txt"
-    model_variant = (
+    variant_file = ckpt_path / "variant.txt"
+    variant = (
         variant_file.read_text(encoding="utf-8").strip()
         if variant_file.exists()
-        else cfg.model.model_variant
+        else cfg.model.variant
     )
 
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
     model = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
 
-    use_rejection = getattr(cfg.sel, "use_rejection", False)
-    ssi_prompt = getattr(cfg.ssi, "ssi_prompt", "ssi")
-    tokens = S2GTokens(variant=model_variant, use_rejection=use_rejection, prompt=ssi_prompt)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=False)
+    use_rejection = getattr(cfg.graph, "use_rejection", False)
+    prompt_type = getattr(cfg.prompt, "type", "natural")
+    tokens = S2GTokens(variant=variant, use_rejection=use_rejection, prompt=prompt_type)
+    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
 
-    rel_schema_path = getattr(cfg.data, "schema_file", None) or getattr(cfg.data, "rel_schema", None)
-    ent_schema_path = getattr(cfg.data, "entity_schema_file", None) or getattr(cfg.data, "ent_schema", None)
+    rel_schema_path = cfg.data.rel_schema
+    ent_schema_path = cfg.data.ent_schema
 
     rel_schema = load_schema(rel_schema_path) if rel_schema_path else []
-    entity_schema = load_entity_schema(ent_schema_path) if ent_schema_path else []
+    ent_schema = load_ent_schema(ent_schema_path) if ent_schema_path else []
 
     split = cfg.evaluation.split
     dataset_path = Path(cfg.data.data_dir) / f"{split}.jsonl"
@@ -63,20 +63,21 @@ def main() -> None:
 
     base_collator = S2GCollator(
         tokenizer=tokenizer,
-        entity_schema=entity_schema,
+        ent_schema=ent_schema,
         rel_schema=rel_schema,
         config={
-            "model_variant": model_variant,
-            "max_source_length": cfg.tokenization.max_source_length,
-            "max_target_length": cfg.tokenization.max_target_length,
-            "max_ent_types": len(entity_schema),
+            "variant": variant,
+            "max_source_length": cfg.tokenizer.max_source_length,
+            "max_target_length": cfg.tokenizer.max_target_length,
+            "max_ent_types": len(ent_schema),
             "max_rel_types": len(rel_schema),
-            "mode": getattr(cfg.ssi, "mode", "budget"),
-            "random_prompt": getattr(cfg.ssi, "random_prompt", False),
-            "random_sel": getattr(cfg.sel, "random_sel", False),
+            "mode": getattr(cfg.prompt, "mode", "budget"),
+            "prompt_type": prompt_type,
+            "random_prompt": getattr(cfg.prompt, "random_prompt", False),
+            "random_graph": getattr(cfg.graph, "random_graph", False),
             "use_rejection": use_rejection,
-            "use_nesting": getattr(cfg.sel, "use_nesting", True),
-            "ssi_prompt": ssi_prompt,
+            "use_nesting": getattr(cfg.graph, "use_nesting", True),
+            "seed": cfg.train.seed,
         },
     )
     eval_collator = base_collator.to_eval_mode()
@@ -92,24 +93,23 @@ def main() -> None:
     evaluator = S2GEvaluator(
         tokenizer=tokenizer,
         tokens=tokens,
-        model_variant=model_variant,
+        variant=variant,
         rel_schema=rel_schema,
-        entity_schema=entity_schema,
+        ent_schema=ent_schema,
     )
 
     out_dir = Path(cfg.data.output_dir)
     constraint_decoding = getattr(cfg.generation, "constraint_decoding", False)
     evaluator.run_evaluation(
-        model=model,
-        dataloader=dataloader,
         dataset=eval_dataset,
-        collator=eval_collator,
-        out_dir=out_dir,
         split=split,
-        device=device,
-        max_target_length=cfg.tokenization.max_target_length,
+        dataloader=dataloader,
+        out_dir=out_dir,
+        model=model,
+        max_target_length=cfg.tokenizer.max_target_length,
         num_beams=cfg.generation.num_beams,
         constraint_decoding=constraint_decoding,
+        device=device,
     )
 
 

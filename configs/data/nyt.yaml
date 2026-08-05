@@ -53,8 +53,3 @@ expanded_relations:
   profession: profession
   religion: religion
   teams: teams
-
-sel:
-  random_sel: false
-  use_rejection: false
-  warm_start: true

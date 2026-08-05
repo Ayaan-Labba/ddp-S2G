@@ -29,10 +29,10 @@ class S2GCollator:
         rel_schema: List[str], 
         config: Dict[str, Any]
     ) -> None:
-        self.variant = config.get('model_variant')
+        self.variant = config.get('variant')
         self.mode = config.get('mode', 'budget')
         if self.variant not in VALID_VARIANTS or self.mode not in {'budget', 'bernoulli'}:
-            raise ValueError(f"Invalid model_variant '{self.variant}' or mode '{self.mode}'.")
+            raise ValueError(f"Invalid model variant '{self.variant}' or mode '{self.mode}'.")
 
         self.tokenizer = tokenizer
         self.ent_schema = list(ent_schema)
@@ -115,7 +115,7 @@ class S2GCollator:
         return enc, dec
 
     def prepare_boundary_joint(self, inst: Dict) -> Tuple[str, str]:
-        pos_rel, neg_rel = self._sample_types(
+        pos_rel, neg_rel = self.sample_types(
             inst['rel_types'], self.rel_schema, self.cfg.get('max_rel_types')
         )
         enc = build_boundary_joint_encoder_input(

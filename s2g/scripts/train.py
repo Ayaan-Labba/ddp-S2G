@@ -152,7 +152,7 @@ def main() -> None:
             max_target_length = cfg.tokenizer.max_target_length,
             collator = collator,
             num_beams = cfg.generation.num_beams,
-            sample_generation_interval = cfg.callbacks.sample_generation_interval
+            interval = cfg.callbacks.sample_generation_interval
         )
     ]
 
@@ -248,7 +248,6 @@ def main() -> None:
             model=model,
             dataloader=val_dataloader,
             dataset=val_dataset,
-            collator=eval_collator,
             out_dir=out_dir,
             split='val',
             device=device,

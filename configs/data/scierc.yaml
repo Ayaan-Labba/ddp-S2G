@@ -22,8 +22,3 @@ expanded_relations:
   hyponym of: hyponym of
   part of: part of
   used for: used for
-
-sel:
-  random_sel: false
-  use_rejection: false
-  warm_start: true

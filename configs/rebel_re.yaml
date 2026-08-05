@@ -18,7 +18,7 @@
 #   google/flan-t5-large   Same size as BART-large
 #
 # To train with Flan-T5-base instead of BART-large, run:
-#   python -m s2g.scripts.train_rebel --config configs/tasks/rebel_re/conll04.yaml \
+#   python -m s2g.scripts.train_rebel --config configs/rebel_re.yaml \
 #       model.name=google/flan-t5-base \
 #       data.output_dir=outputs/rebel_re/t5-conll04
 #
@@ -38,8 +38,9 @@ model:
   # Switch between BART-large (REBEL original) and Flan-T5 via CLI override.
   name: facebook/bart-large
   pretrained_checkpoint: null    # Set to resume from a fine-tuned checkpoint
+  variant: re
 
-tokenization:
+tokenizer:
   # REBEL's CoNLL04 settings.  Source length 1024 is generous for sentence-level
   # RE; 128 is sufficient for the short typed linearisation.
   max_source_length: 1024
@@ -67,6 +68,7 @@ train:
   gradient_checkpointing: false
   precision: "fp32"              # Change to fp16 if GPU does not support bf16
   seed: 42                     # REBEL: seed: 42
+  warm_start: true
 
 validation:
   # Validate every 50 optimizer steps (~1.7 effective epochs).
@@ -80,9 +82,17 @@ validation:
 
 generation:
   num_beams: 3                 # REBEL CoNLL04: eval_beams: 3
-  length_penalty: 0.0          # REBEL: no length bias (structured output)
-  no_repeat_ngram_size: 0      # REBEL: entity spans may legitimately repeat
-  early_stopping: false        # REBEL: do not truncate output prematurely
+  constraint_decoding: false   # REBEL: do not truncate output prematurely
+
+prompt:
+  mode: budget
+  type: natural
+  random_prompt: false
+
+graph:
+  random_graph: false
+  use_rejection: false
+  use_nesting: true
 
 checkpoint:
   save_top_k: 1                # REBEL: save_top_k: 1
@@ -95,15 +105,11 @@ wandb:
 
 data:
   data_dir: data/conll04
-  schema_file: data/conll04/relation.schema
-  entity_schema_file: data/conll04/entity.schema
+  rel_schema: data/conll04/relation.schema
+  ent_schema: data/conll04/entity.schema
   output_dir: outputs/rebel_re/bart-conll04
 
 hardware:
   num_workers: 4
   persistent_workers: true
   gpu_ids: [0]                # null = use all visible GPUs; [0] = first GPU only
-sel:
-  random_sel: false
-  use_rejection: false
-  warm_start: true

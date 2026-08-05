@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 class S2GTrainer(Seq2SeqTrainer):
     def __init__(self, **kwargs: Any) -> None:
-        self.variant = kwargs.pop('model_variant')
+        self.variant = kwargs.pop('variant')
         if self.variant not in VALID_VARIANTS:
-            raise ValueError(f"model_variant must be one of {VALID_VARIANTS}, got {self.variant!r}.")
+            raise ValueError(f"Model variant must be one of {VALID_VARIANTS}, got {self.variant!r}.")
 
         self.eval_train_dataset = kwargs.pop('eval_train_dataset', None)
         self.ent_schema         = kwargs.pop('ent_schema', [])
@@ -33,7 +33,7 @@ class S2GTrainer(Seq2SeqTrainer):
         super().__init__(compute_metrics=self.compute_metrics_hf, **kwargs)
 
         self.evaluator = S2GEvaluator(
-            model_variant=self.variant,
+            variant=self.variant,
             tokenizer=self.processing_class,
             tokens=self.tokens,
             rel_schema=self.rel_schema,

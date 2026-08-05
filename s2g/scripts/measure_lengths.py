@@ -13,7 +13,7 @@ from transformers import AutoTokenizer, set_seed
 
 from s2g.data import S2GCollator, S2GDataset
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
-from s2g.scripts.config_utils import load_config, load_entity_schema, load_schema
+from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ def _scan_dataset(
     tgt_lengths: List[int] = []
     
     # Set step to max_steps to evaluate worst-case negative sample inclusion
-    collator.current_step = collator._cfg.get("max_steps", 0)
-    prep_fn = getattr(collator, f"_prepare_{variant}")
+    collator.current_step = collator.cfg.get("max_steps", 0)
+    prep_fn = getattr(collator, f"prepare_{variant}")
 
     for i in tqdm(range(len(dataset)), desc=f"scanning ({variant})", leave=False):
         inst = dataset[i]
@@ -68,34 +68,34 @@ def main() -> None:
     cfg = load_config()
     set_seed(cfg.train.seed)
 
-    variant = cfg.model.model_variant
+    variant = cfg.model.variant
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     
     tokens = S2GTokens(variant, use_rejection=cfg.graph.use_rejection, prompt=cfg.prompt.type)
     add_special_tokens_to_tokenizer(tokenizer, tokens)
 
-    rel_schema, entity_schema = load_schema(cfg.data.rel_schema), load_entity_schema(cfg.data.ent_schema)
+    rel_schema, ent_schema = load_schema(cfg.data.rel_schema), load_ent_schema(cfg.data.ent_schema)
 
     collator = S2GCollator(
-        tokenizer,
-        entity_schema,
-        rel_schema,
-        {
-            "model_variant": variant,
+        tokenizer=tokenizer,
+        ent_schema=ent_schema,
+        rel_schema=rel_schema,
+        config={
+            "variant": variant,
             "max_source_length": cfg.tokenizer.max_source_length,
             "max_target_length": cfg.tokenizer.max_target_length,
-            "max_ent_types": cfg.prompt.max_ent_types or len(entity_schema),
+            "max_ent_types": cfg.prompt.max_ent_types or len(ent_schema),
             "max_rel_types": cfg.prompt.max_rel_types or len(rel_schema),
             "random_prompt": cfg.prompt.random_prompt,
             "random_graph": cfg.graph.random_graph,
-            "positive_rate_start": getattr(cfg.prompt, "positive_rate_start", 0.5),
-            "positive_rate_end": getattr(cfg.prompt, "positive_rate_end", 0.5),
-            "negative_rate_start": getattr(cfg.prompt, "negative_rate_start", 0.5),
-            "negative_rate_end": getattr(cfg.prompt, "negative_rate_end", 0.5),
+            "pos_rate_start": getattr(cfg.prompt, "pos_rate_start", 0.5),
+            "pos_rate_end": getattr(cfg.prompt, "pos_rate_end", 0.5),
+            "neg_rate_start": getattr(cfg.prompt, "neg_rate_start", 0.5),
+            "neg_rate_end": getattr(cfg.prompt, "neg_rate_end", 0.5),
             "pos_max_start": getattr(cfg.prompt, "pos_max_start", 1),
             "pos_max_end": getattr(cfg.prompt, "pos_max_end", 10),
-            "negative_max_start": getattr(cfg.prompt, "negative_max_start", 1),
-            "negative_max_end": getattr(cfg.prompt, "negative_max_end", 10),
+            "neg_max_start": getattr(cfg.prompt, "neg_max_start", 1),
+            "neg_max_end": getattr(cfg.prompt, "neg_max_end", 10),
             "mode": cfg.prompt.mode,
             "max_steps": cfg.train.max_steps,
             "use_rejection": cfg.graph.use_rejection,
