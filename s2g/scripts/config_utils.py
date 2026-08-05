@@ -88,6 +88,7 @@ class ValidationConfig:
     percent_check: float = 1.0
     train_percent_check: Optional[float] = None
     batch_size: int = 32
+    num_beams: int = 1
     early_stopping_patience: int = 10
     early_stopping_metric: str = 'boundary_f1'
 

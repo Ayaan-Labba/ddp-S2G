@@ -151,7 +151,7 @@ def main() -> None:
             tokenizer = tokenizer,
             max_target_length = cfg.tokenizer.max_target_length,
             collator = collator,
-            num_beams = cfg.generation.num_beams,
+            num_beams = cfg.validation.num_beams,
             interval = cfg.callbacks.sample_generation_interval
         )
     ]
@@ -182,7 +182,7 @@ def main() -> None:
         per_device_eval_batch_size=cfg.validation.batch_size,
         predict_with_generate=True,
         generation_max_length=cfg.tokenizer.max_target_length,
-        generation_num_beams=cfg.generation.num_beams,
+        generation_num_beams=cfg.validation.num_beams,
         dataloader_num_workers=cfg.hardware.num_workers,
         dataloader_persistent_workers=cfg.hardware.persistent_workers,
         save_strategy='steps',
