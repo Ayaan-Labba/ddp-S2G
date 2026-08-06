@@ -35,30 +35,6 @@ def build_rel_ssi(rel_types: List[str], variant: str, random_order: bool = False
     return " ".join([f"{re_str} {t}" for t in types])
 
 
-def find_all_token_spans(source_tokens: List[str], span_text: str) -> List[Tuple[int, int]]: # remove this function
-    span_words = span_text.split()
-    n = len(span_words)
-    results = []
-    if not n: 
-        return results
-
-    first_word = span_words[0]
-    start_idx = 0
-    
-    while start_idx <= len(source_tokens) - n:
-        try:
-            i = source_tokens.index(first_word, start_idx)
-            if source_tokens[i : i + n] == span_words:
-                results.append((i, i + n))
-                start_idx = i + n
-            else:
-                start_idx = i + 1
-        except ValueError:
-            break
-            
-    return results
-
-
 def build_re_encoder_input(
         ent_types: List[str], 
         rel_types: List[str], 

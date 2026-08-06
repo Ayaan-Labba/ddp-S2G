@@ -9,9 +9,9 @@ from pathlib import Path
 
 import numpy as np
 import wandb
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, Seq2SeqTrainingArguments, set_seed
-
 from s2g.data import S2GCollator, S2GDataset
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
 from s2g.training import (
@@ -51,7 +51,7 @@ def main() -> None:
     if local_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize wandb
+    # Initialize wandb and log YAML configuration
     wandb_run_id = (
         (load_run_metadata(cfg.data.output_dir) or {}).get("wandb_run_id") 
         if cfg.checkpoint.resume_from else None
@@ -62,8 +62,11 @@ def main() -> None:
             entity=cfg.wandb.entity,
             name=cfg.wandb.run_name,
             id=wandb_run_id,
-            resume="must" if wandb_run_id else None,
+            resume="must" if wandb_run_id else None
         )
+        cfg_yaml_path = out_dir / "config.yaml"
+        cfg_yaml_path.write_text(OmegaConf.to_yaml(cfg), encoding='utf-8')
+        wandb.save(str(cfg_yaml_path), base_path=str(out_dir))
 
     # Load dataset and schema
     train_dataset = S2GDataset(filepath=Path(cfg.data.data_dir) / "train.jsonl")
