@@ -1,0 +1,34 @@
+model:
+  pretrained_checkpoint: outputs/finetune/rb-conll04/best_model       # Path to trained checkpoint dir
+  variant: re
+
+data:
+  data_dir: data/conll04
+  rel_schema: data/conll04/relation.schema
+  ent_schema: data/conll04/entity.schema
+  output_dir: outputs/finetune/rb-conll04/eval
+
+tokenizer:
+  max_source_length: 220
+  max_target_length: 190
+
+prompt:
+  type: natural
+
+generation:
+  num_beams: 3
+  constraint_decoding: False        # Set true for FSM-constrained evaluation
+  length_penalty: null
+  no_repeat_ngram_size: null
+  early_stopping: null
+
+evaluation:
+  batch_size: 256
+  split: test                       # "val" or "test"
+
+train:
+  seed: 0
+
+hardware:
+  num_workers: 4
+  gpu_ids: [0]

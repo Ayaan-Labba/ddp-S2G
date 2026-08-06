@@ -257,6 +257,9 @@ def main() -> None:
             max_target_length=cfg.tokenizer.max_target_length,
             num_beams=cfg.generation.num_beams,
             constraint_decoding=constraint_decoding,
+            length_penalty=getattr(cfg.generation, 'length_penalty', None),
+            early_stopping=getattr(cfg.generation, 'early_stopping', None),
+            no_repeat_ngram_size=getattr(cfg.generation, 'no_repeat_ngram_size', None)
         )
 
         # Test Set Evaluation
@@ -266,7 +269,7 @@ def main() -> None:
             test_dataset = S2GDataset(test_path, seed=cfg.train.seed)
             test_dataloader = DataLoader(
                 test_dataset,
-                batch_size=cfg.evaluation.batch_size,
+                batch_size=cfg.validation.batch_size,
                 shuffle=False,
                 num_workers=cfg.hardware.num_workers,
                 collate_fn=eval_collator,
@@ -277,13 +280,15 @@ def main() -> None:
                 model=model,
                 dataloader=test_dataloader,
                 dataset=test_dataset,
-                collator=eval_collator,
                 out_dir=out_dir / "eval_test",
                 split='test',
                 device=device,
                 max_target_length=cfg.tokenizer.max_target_length,
                 num_beams=cfg.generation.num_beams,
                 constraint_decoding=constraint_decoding,
+                length_penalty=getattr(cfg.generation, 'length_penalty', None),
+                early_stopping=getattr(cfg.generation, 'early_stopping', None),
+                no_repeat_ngram_size=getattr(cfg.generation, 'no_repeat_ngram_size', None)
             )
 
         # Log Final Metrics to W&B

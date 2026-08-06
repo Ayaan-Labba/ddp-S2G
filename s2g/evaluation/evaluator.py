@@ -8,7 +8,7 @@ import contextlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import torch
@@ -109,8 +109,11 @@ class S2GEvaluator:
         model: Any,
         max_target_length: int,
         num_beams: int,
-        constraint_decoding,
         device: torch.device,
+        constraint_decoding: bool = False,
+        length_penalty: Optional[float] = None,
+        early_stopping: Optional[bool] = None,
+        no_repeat_ngram_size: Optional[int] = None
     ) -> Dict[str, float]:
         """
         Executes a memory-efficient, streaming evaluation over a DataLoader.
@@ -147,6 +150,11 @@ class S2GEvaluator:
                     'max_length': max_target_length,
                     'num_beams': num_beams,
                 }
+                
+                if num_beams > 1:
+                    if length_penalty is not None: gen_kwargs['length_penalty'] = length_penalty
+                    if early_stopping is not None: gen_kwargs['early_stopping'] = early_stopping
+                    if no_repeat_ngram_size is not None: gen_kwargs['no_repeat_ngram_size'] = no_repeat_ngram_size
 
                 if constraint_decoding:
                     gen_kwargs['logits_processor'] = [

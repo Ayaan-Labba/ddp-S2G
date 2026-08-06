@@ -11,7 +11,7 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 import torch
 from transformers import LogitsProcessor, PreTrainedTokenizerBase
 
-from s2g.linearisation import AnyTokens, S2GTokens, get_token_ids
+from s2g.linearisation import S2GTokens, get_token_ids
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class Trie:
 def _extract_ssi_labels(
         source_row: List[int], 
         tokenizer: PreTrainedTokenizerBase,
-        tokens: AnyTokens,
+        tokens: S2GTokens,
         tid: Dict[str, int],
         eos_id: int, 
         pad_id: int
@@ -124,7 +124,7 @@ class _HypState:
 class ConstraintDecodingProcessor(LogitsProcessor):
     def __init__(
             self, tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-            tokens: AnyTokens, num_beams: int = 1,
+            tokens: S2GTokens, num_beams: int = 1,
             entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
         ) -> None:
         self.num_beams, self._batch_size = num_beams, source_ids.shape[0]
@@ -518,7 +518,7 @@ class ConstraintDecodingProcessor(LogitsProcessor):
 
 def build_constraint_processor(
         tokenizer: PreTrainedTokenizerBase, source_ids: torch.Tensor, 
-        tokens: AnyTokens = S2GTokens("joint"), num_beams: int = 1,
+        tokens: S2GTokens = S2GTokens("joint"), num_beams: int = 1,
         entity_schema: Optional[List[str]] = None, rel_schema: Optional[List[str]] = None
     ) -> ConstraintDecodingProcessor:
     return ConstraintDecodingProcessor(tokenizer=tokenizer, source_ids=source_ids, tokens=tokens, num_beams=num_beams, entity_schema=entity_schema, rel_schema=rel_schema)

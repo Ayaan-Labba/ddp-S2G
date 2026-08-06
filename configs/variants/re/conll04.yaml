@@ -3,15 +3,15 @@
 # =============================================================================
 
 wandb:
-  project: s2g-v1
+  project: s2g-ablations
   entity: null
-  run_name: re-base-conll04
+  run_name: rb-conll04-cosine
 
 data:
   data_dir: data/conll04
   rel_schema: data/conll04/relation.schema
   ent_schema: data/conll04/entity.schema
-  output_dir: outputs/finetune/re-base-conll04
+  output_dir: outputs/finetune/rb-conll04-cosine
 
 model:
   name: google/flan-t5-base
@@ -19,7 +19,7 @@ model:
   variant: re           
 
 tokenizer:
-  max_source_length: 250
+  max_source_length: 240
   max_target_length: 190            # Max values from `measure_lengths.py`
 
 prompt:
@@ -41,13 +41,13 @@ optimizer:
   adam_epsilon: 1.0e-8
 
 scheduler:
-  type: constant_with_warmup
+  type: cosine
   warmup_steps: 346                    # ~12% linear warmup across 200 epochs
 
 train:
   max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32
-  batch_size: 8                     
-  gradient_acc_steps: 4              
+  batch_size: 32                     
+  gradient_acc_steps: 1              
   gradient_clip_value: 1.0
   gradient_checkpointing: False      
   precision: 'bf16'
@@ -58,14 +58,17 @@ validation:
   check_interval: 29               # Validate once per epoch
   percent_check: 1.0
   train_percent_check: 0.25
-  batch_size: 128
+  batch_size: 256
   num_beams: 1
   early_stopping_patience: 10
   early_stopping_metric: strict_f1
 
 generation:
-  num_beams: 3                     
-  constraint_decoding: False 
+  num_beams: 3
+  constraint_decoding: False
+  length_penalty: null
+  early_stopping: null
+  no_repeat_ngram_size: null
 
 checkpoint:
   save_top_k: 1

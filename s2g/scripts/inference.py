@@ -47,8 +47,10 @@ def _ensure_nltk_punkt() -> None:
 
 def _generate_single(model, tokenizer, encoder_input, tokens, num_beams, max_src, max_tgt, device, constraint_decoding=False, entity_schema=None, rel_schema=None) -> str:
     tok_out = tokenizer([encoder_input], max_length=max_src, truncation=True, return_tensors="pt").to(device, non_blocking=True)
-    gen_kwargs = {**tok_out, "num_beams": num_beams, "max_length": max_tgt, "length_penalty": 0.0, "no_repeat_ngram_size": 0, "early_stopping": False}
-    
+    gen_kwargs = {**tok_out, "num_beams": num_beams, "max_length": max_tgt, "no_repeat_ngram_size": 0, "early_stopping": False}
+    if num_beams > 1:
+        gen_kwargs["length_penalty"] = 0.0
+
     if constraint_decoding: 
         gen_kwargs["logits_processor"] = [build_constraint_processor(tokenizer, tok_out["input_ids"], tokens, num_beams, entity_schema=entity_schema, rel_schema=rel_schema)]
 
@@ -111,7 +113,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True); parser.add_argument("--schema_file", required=True); parser.add_argument("--entity_schema_file", default=None); parser.add_argument("--input_file", default=None); parser.add_argument("--output_file", default=None); parser.add_argument("--constraint_decoding", default="false"); parser.add_argument("--num_beams", type=int, default=4); parser.add_argument("--max_source_length", type=int, default=300); parser.add_argument("--max_target_length", type=int, default=200); parser.add_argument("--ssi_prompt", default="ssi", choices=["ssi", "natural", "false"])
     args = parser.parse_args()
 
-    tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint, torch_dtype="auto")
+    tokenizer, model = AutoTokenizer.from_pretrained(args.checkpoint), AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint, dtype="auto")
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
     variant_file = Path(args.checkpoint) / "model_variant.txt"

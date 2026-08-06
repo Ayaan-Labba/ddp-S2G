@@ -261,13 +261,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     cfg = load_config()
 
+    if cfg.hardware.gpu_ids:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.hardware.gpu_ids[0])
+
     if not torch.cuda.is_available():
         logger.error("No CUDA device found — VRAM measurement requires a GPU.")
         return
 
-    if cfg.hardware.gpu_ids:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.hardware.gpu_ids[0])
-    device = torch.device("cuda:0")
+    device = torch.device(f"cuda:{cfg.hardware.gpu_ids[0]}")
 
     logger.info("Loading model and tokenizer: %s", cfg.model.pretrained_checkpoint or cfg.model.name)
     precision_to_dtype = {
@@ -279,7 +280,7 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model = AutoModelForSeq2SeqLM.from_pretrained(
-        cfg.model.pretrained_checkpoint or cfg.model.name, torch_dtype=dtype
+        cfg.model.pretrained_checkpoint or cfg.model.name, dtype=dtype
     )
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None

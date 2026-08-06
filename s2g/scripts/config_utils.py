@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DataConfig:
-    data_dir: str = None
+    data_dir: Optional[str] = None
     rel_schema: Optional[str] = None
     ent_schema: Optional[str] = None
-    output_dir: str = None
+    output_dir: Optional[str] = None
 
 @dataclass
 class ModelConfig:
@@ -96,6 +96,9 @@ class ValidationConfig:
 class GenerationConfig:
     num_beams: int = 3
     constraint_decoding: bool = False
+    length_penalty: Optional[float] = None
+    early_stopping: Optional[bool] = None
+    no_repeat_ngram_size: Optional[int] = None
 
 @dataclass
 class EvaluationConfig:

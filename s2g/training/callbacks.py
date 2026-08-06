@@ -30,7 +30,7 @@ class StepTrackingCallback(TrainerCallback):
     def __init__(self, collator: S2GCollator) -> None: 
         self.collator = collator
         
-    def on_step_end(self, state: TrainerState) -> None:
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
         self.collator.current_step = state.global_step
 
 
@@ -40,7 +40,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         tokenizer: PreTrainedTokenizerBase, 
         variant: str, 
         sample_batch: List[Dict], 
-        collator: S2GCollator, 
+        collator: S2GCollator,
         interval: int = 1_000,
         num_beams: int = 3,
         max_target_length: int = 256
@@ -58,7 +58,14 @@ class GenerateTextSamplesCallback(TrainerCallback):
         self.max_target_length =  max_target_length
         self.last_logged = -1
 
-    def on_step_end(self, state: TrainerState, model: AutoModelForSeq2SeqLM = None) -> None:
+    def on_step_end(
+            self, 
+            args, 
+            state: TrainerState, 
+            control: TrainerControl, 
+            model: AutoModelForSeq2SeqLM = None, 
+            **kwargs
+        ) -> None:
         if not state.is_world_process_zero or \
             state.global_step in {0, self.last_logged} or state.global_step % self.interval != 0: 
             return
@@ -73,7 +80,14 @@ class GenerateTextSamplesCallback(TrainerCallback):
         except Exception: 
             logger.exception("GenerateTextSamplesCallback failed at step %d.", state.global_step)
 
-    def on_train_begin(self, state: TrainerState, model: AutoModelForSeq2SeqLM = None) -> None:
+    def on_train_begin(
+            self, 
+            args, 
+            state: TrainerState, 
+            control: TrainerControl, 
+            model: AutoModelForSeq2SeqLM = None, 
+            **kwargs
+        ) -> None:
         if not state.is_world_process_zero: 
             return
             
@@ -104,10 +118,14 @@ class GenerateTextSamplesCallback(TrainerCallback):
         
         model.eval()
         with torch.inference_mode(), ctx:
-            generated_ids = (model.module if hasattr(model, 'module') else model).generate( 
-                input_ids=input_ids, attention_mask=attn_mask, num_beams=self.num_beams, max_length=self.max_target_length,
-                length_penalty=0.0, no_repeat_ngram_size=0, early_stopping=False,
-            ) # model.module for DDP
+            gen_kwargs = {
+                'input_ids': input_ids,
+                'attention_mask': attn_mask,
+                'num_beams': self.num_beams,
+                'max_length': self.max_target_length
+            }
+
+            generated_ids = (model.module if hasattr(model, 'module') else model).generate(**gen_kwargs) # model.module for DDP
 
         model.train()
 
@@ -126,14 +144,16 @@ class GenerateTextSamplesCallback(TrainerCallback):
         specials_to_remove = [t for t in (self.tokenizer.pad_token, self.tokenizer.eos_token, self.tokenizer.bos_token) if t]
         rows = []
         
-        cols = ['Source', 'Encoder Input']
-        if self.variant in {'joint', 'boundary_joint'}:
-            cols.extend(['Predicted Entities', 'Gold Entities'])
-
-        if self.variant in {'re', 'boundary_re', 'joint', 'boundary_joint'}:
-            cols.extend(['Predicted Triplets', 'Gold Triplets'])
-
-        cols.extend(['Predicted GRAPH', 'Gold GRAPH'])
+        cols = [
+            'Source', 
+            'Encoder Input', 
+            'Predicted Entities', 
+            'Gold Entities', 
+            'Predicted Triplets', 
+            'Gold Triplets', 
+            'Predicted Graph', 
+            'Gold Graph'
+        ]
         
         for i, inst in enumerate(self.sample_batch):
             p_graph, g_graph = pred_texts[i], gold_texts[i]
@@ -150,25 +170,23 @@ class GenerateTextSamplesCallback(TrainerCallback):
 
             row = [inst['text'], prompts[i]]
             
-            if self.variant in {'joint', 're'}:
+            include_types = self.variant in {'joint', 're'}
+            
+            # Format entities (with types for joint/re, without types for boundary_*)
+            if include_types:
                 p_e = "\n".join([f"{e['text']} [{e.get('type')}]" for e in p_ent]) if p_ent else "(none)"
-                g_e = "\n".join([f"{e['text']} [{e.get('type') }]" for e in g_ent]) if g_ent else "(none)"
-                p_triplets = extract_triplets(p_ent, include_types=True)
-                g_triplets = extract_triplets(g_ent, include_types=True)
-                p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
-                g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
-                row.extend([p_e, g_e, p_t, g_t])
-
-            if self.variant in {'boundary_re', 'boundary_joint'}:
+                g_e = "\n".join([f"{e['text']} [{e.get('type')}]" for e in g_ent]) if g_ent else "(none)"
+            else:
                 p_e = "\n".join([f"{e['text']}" for e in p_ent]) if p_ent else "(none)"
                 g_e = "\n".join([f"{e['text']}" for e in g_ent]) if g_ent else "(none)"
-                p_triplets = extract_triplets(p_ent, include_types=False)
-                g_triplets = extract_triplets(g_ent, include_types=False)
-                p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
-                g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
-                row.extend([p_e, g_e, p_t, g_t])
-                
-            row.extend([p_graph, g_graph])
+
+            # Format triplets
+            p_triplets = extract_triplets(p_ent, include_types=include_types)
+            g_triplets = extract_triplets(g_ent, include_types=include_types)
+            p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
+            g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
+
+            row.extend([p_e, g_e, p_t, g_t, p_graph, g_graph])
             rows.append(row)
 
         wandb.log(
@@ -185,7 +203,7 @@ class PeriodicCheckpointCallback(TrainerCallback):
         self.wandb_run_id = wandb_run_id
         self.last_saved = -1
 
-    def on_step_end(self, state: TrainerState, control: TrainerControl) -> None:
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
         if state.global_step in {0, self.last_saved} or state.global_step % self.every_n_steps != 0: 
             return
             
