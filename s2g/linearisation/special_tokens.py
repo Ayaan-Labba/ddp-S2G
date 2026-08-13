@@ -1,57 +1,35 @@
 """
-Special token registry for the S2G model.
+Special token registry for the S2G model (Sentinel Branch).
 """
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
-
 from transformers import AutoModel, AutoTokenizer
 import torch
 
-# All linearisation token names
-ALL_TOKEN_NAMES: List[str] = [
-    'ner', 're', 'text', 
-    'ent', 'e_type',
-    'head', 'r_type', 'nr_type', 'tail',
-    'null'
-]
-
+# Explicit special tokens added to model vocabulary
+ALL_TOKEN_NAMES: List[str] = ['e_type', 'r_type', 'nr_type', 'null']
 VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
+
 class S2GTokens:
-    # Token string mappings for each linearisation token
     token_strs = {
-        'ner':      '<extra_id_0>', 
-        're':       '<extra_id_1>', 
-        'text':     '<extra_id_2>',
-        'ent':      '<extra_id_3>', 
-        'e_type':   '<extra_id_4>', 
-        'head':     '<extra_id_5>',
-        'r_type':   '<extra_id_6>', 
-        'nr_type':  '<extra_id_7>', 
-        'tail':     '<extra_id_8>',
-        'null':     '<extra_id_9>'
+        'e_type':   '<e_type>', 
+        'r_type':   '<r_type>', 
+        'nr_type':  '<nr_type>',
+        'null':     '<null>'
     }
 
-    # Token maps for each variant to get active tokens
     base_tok_map = {
-        're':             {'head', 'e_type', 'r_type', 'nr_type', 'tail'},
-        'boundary_re':    {'head', 'r_type', 'nr_type', 'tail'},
-        'boundary_joint': {'ent', 'head', 'r_type', 'nr_type', 'tail'},
-        'joint':          {'ent', 'e_type', 'head', 'r_type', 'nr_type', 'tail'},
-    }
-
-    ssi_tok_map = {
-        're':             {'head', 'e_type', 'r_type', 'nr_type', 'tail', 're', 'text', 'ner'},
-        'boundary_re':    {'head', 'r_type', 'nr_type', 'tail', 're', 'text'},
-        'boundary_joint': {'ent', 'head', 'r_type', 'nr_type', 'tail', 're', 'text'},
-        'joint':          {'ent', 'e_type', 'head', 'r_type', 'nr_type', 'tail', 're', 'text', 'ner'},
+        're':             {'e_type', 'r_type', 'nr_type'},
+        'boundary_re':    {'r_type', 'nr_type'},
+        'boundary_joint': {'r_type', 'nr_type'},
+        'joint':          {'e_type', 'r_type', 'nr_type'},
     }
 
     def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:
         self.variant = variant
-        active_map = self.ssi_tok_map if prompt == 'ssi' else self.base_tok_map
-        self.active_tokens = active_map.get(variant, active_map['joint']).copy()
+        self.active_tokens = self.base_tok_map.get(variant, self.base_tok_map['joint']).copy()
         if use_rejection: 
             self.active_tokens.add('null')
 
@@ -61,6 +39,10 @@ class S2GTokens:
     def all_tokens(self) -> List[str]:
         return self._all_tokens
 
+    @staticmethod
+    def sentinel_token(idx: int) -> str:
+        return f"<extra_id_{idx}>"
+
 
 def add_special_tokens_to_tokenizer(
         tokenizer: AutoTokenizer, 
@@ -68,24 +50,17 @@ def add_special_tokens_to_tokenizer(
         model: Optional[AutoModel] = None, 
         warm_start: bool = True,
     ) -> int:
-    # Add special tokens to tokenizer and optionally warm start model embeddings
     num_added = tokenizer.add_special_tokens({'additional_special_tokens': tokens.all_tokens})
     if model is not None:
         if num_added > 0:
-            model.config.tie_word_embeddings = False # weights are untied for flan-t5 models
+            model.config.tie_word_embeddings = False
             model.resize_token_embeddings(len(tokenizer))
 
         if warm_start:
             token_init_phrases = {
-                'ner':      'find entities: ',
-                're':       'find relations: ',
-                'text':     'text: ',
-                'ent':      'entity: ',
                 'e_type':   'entity type: ',
-                'head':     'subject: ',
                 'r_type':   'relation: ',
                 'nr_type':  'next relation: ',
-                'tail':     'object: ',
                 'null':     'not found: ',
             }
 
@@ -103,7 +78,6 @@ def add_special_tokens_to_tokenizer(
                     init_ids = tokenizer.encode(init_text, add_special_tokens=False)
                     
                     if init_ids and new_id != tokenizer.unk_token_id:
-                        # Warm start input embeddings by taking the mean of the initialization phrase
                         mean_in_emb = in_emb[init_ids].mean(dim=0)
                         in_emb[new_id].copy_(mean_in_emb)
                         if out_emb is not None:
