@@ -14,45 +14,38 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from s2g.linearisation import VALID_VARIANTS
 
-Triplet = Tuple[str, str, str]              # (head_text, rel_type, tail_text)
-Quintuple = Tuple[str, str, str, str, str]  # (head, head_type, rel, tail, tail_type)
-EntityMention = Tuple[str, str]             # (span_text, entity_type)
+Triplet = Tuple[int, str, int]              # (head_idx, rel_type, tail_idx)
+Quintuple = Tuple[int, str, str, int, str]  # (head_idx, head_type, rel_type, tail_idx, tail_type)
+EntityMention = Tuple[int, str]             # (head_idx, entity_type)
 EntityBlock = Dict[str, Any]
 
 
-def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[str], List[EntityMention]]:
+def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[int], List[EntityMention]]:
     """
-    Single-pass extraction of all evaluation elements from a sentence's EntityBlocks.
+    Single-pass extraction of all evaluation elements (indexed by position) from a sentence's EntityBlocks.
     """
     triplets: List[Triplet] = []
     quintuples: List[Quintuple] = []
-    entities: List[str] = []
+    entities: List[int] = []
     mentions: List[EntityMention] = []
 
-    for ent in blocks:
-        h_text = ent.get('text', '')
+    for h_idx, ent in enumerate(blocks):
         h_type = ent.get('type', '')
         
-        if h_text:
-            entities.append(h_text)
-            if h_type:
-                mentions.append((h_text, h_type))
+        entities.append(h_idx)
+        if h_type:
+            mentions.append((h_idx, h_type))
 
         for rel in ent.get('relations', []):
             r_type = rel.get('type', '')
-            t_text = rel.get('tail', '')
-            t_type = rel.get('tail_type', '')
+            t_idx = rel.get('tail_id')
 
-            if h_text and r_type and t_text:
-                triplets.append((h_text, r_type, t_text))
-
-            if h_type and t_type:
-                quintuples.append((h_text, h_type, r_type, t_text, t_type))
-
-            if t_text:
-                entities.append(t_text)
-                if t_type:
-                    mentions.append((t_text, t_type))
+            if t_idx is not None and t_idx < len(blocks):
+                t_type = blocks[t_idx].get('type', '')
+                if r_type:
+                    triplets.append((h_idx, r_type, t_idx))
+                    if h_type and t_type:
+                        quintuples.append((h_idx, h_type, r_type, t_idx, t_type))
 
     return triplets, quintuples, entities, mentions
 
