@@ -46,8 +46,9 @@ def organise_filter_and_block(
     # Pack into entity blocks
     ent_blocks = []
     for ent in filtered_ents:
-        ent['relations'] = rel_groups[tuple(ent['offset'])]
-        ent_blocks.append(ent)
+        ent_block = dict(ent)
+        ent_block['relations'] = rel_groups[tuple(ent['offset'])]
+        ent_blocks.append(ent_block)
         
     return ent_blocks
 
