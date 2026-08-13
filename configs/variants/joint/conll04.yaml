@@ -2,14 +2,35 @@
 # S2G — CoNLL04 Fine-tuning Configuration (Empirical SOTA Flan-T5-Large)
 # =============================================================================
 
+wandb:
+  project: s2g-ablations
+  entity: null
+  run_name: jb-conll04-nest-mark
+
+data:
+  data_dir: data/conll04
+  rel_schema: data/conll04/relation.schema
+  ent_schema: data/conll04/entity.schema
+  output_dir: outputs/finetune/jb-conll04-nest-mark
+
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null       
-  variant: joint           
+  variant: joint
 
 tokenizer:
-  max_source_length: 250
+  max_source_length: 240
   max_target_length: 190            # Max values from `measure_lengths.py`
+
+prompt:
+  mode: budget
+  type: natural
+  random_prompt: False
+
+graph:
+  use_nesting: True
+  use_rejection: False
+  random_graph: False
 
 optimizer:
   optim: adamw_torch
@@ -25,35 +46,29 @@ scheduler:
 
 train:
   max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32
-  batch_size: 8                     
-  gradient_acc_steps: 4              
+  batch_size: 32                     
+  gradient_acc_steps: 1              
   gradient_clip_value: 1.0
   gradient_checkpointing: False      
-  precision: "bf16"
+  precision: 'bf16'
   seed: 0
-  warm_start: false
+  warm_start: False
 
 validation:
   check_interval: 29               # Validate once per epoch
   percent_check: 1.0
   train_percent_check: 0.25
-  batch_size: 128
+  batch_size: 256
+  num_beams: 1
   early_stopping_patience: 10
   early_stopping_metric: strict_f1
 
 generation:
-  num_beams: 1                     
-  constraint_decoding: false        
-
-prompt:
-  mode: budget
-  type: natural
-  random_prompt: false
-
-graph:
-  random_graph: false
-  use_rejection: false
-  use_nesting: true
+  num_beams: 3
+  constraint_decoding: False
+  length_penalty: null
+  early_stopping: null
+  no_repeat_ngram_size: null
 
 checkpoint:
   save_top_k: 1
@@ -63,18 +78,7 @@ checkpoint:
 callbacks:
   sample_generation_interval: 290
 
-wandb:
-  project: s2g
-  entity: null
-  run_name: j-b-conll04-np3
-
-data:
-  data_dir: data/conll04
-  rel_schema: data/conll04/relation.schema
-  ent_schema: data/conll04/entity.schema
-  output_dir: outputs/finetune/j-b-conll04-np3
-
 hardware:
   num_workers: 4
-  persistent_workers: true
+  persistent_workers: True
   gpu_ids: [0]
