@@ -268,7 +268,7 @@ def main() -> None:
         logger.error("No CUDA device found — VRAM measurement requires a GPU.")
         return
 
-    device = torch.device(f"cuda:{cfg.hardware.gpu_ids[0]}")
+    device = torch.device("cuda:0")
 
     logger.info("Loading model and tokenizer: %s", cfg.model.pretrained_checkpoint or cfg.model.name)
     precision_to_dtype = {

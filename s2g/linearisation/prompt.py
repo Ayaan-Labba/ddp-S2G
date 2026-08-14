@@ -16,7 +16,7 @@ def get_tok(variant: str, prompt: str = 'ssi') -> S2GTokens:
     """Helper to lazily load and cache the S2GTokens instance on demand."""
     cache_key = (variant, prompt)
     if cache_key not in TOK_CACHE:
-        TOK_CACHE[cache_key] = S2GTokens(variant, prompt)
+        TOK_CACHE[cache_key] = S2GTokens(variant, prompt=prompt)
     
     return TOK_CACHE[cache_key]
 
@@ -95,7 +95,7 @@ def build_joint_encoder_input(
     r_types = random.sample(rel_types, len(rel_types)) if random_order else sorted(rel_types)
     ent_types_str = ", ".join(f"{e}" for e in ent_types)
     r_types_str = ", ".join(f"{r}" for r in r_types)
-    return f"Extract all entities of type [{ent_types_str}] and find relations of type [{r_types_str}] among the extracted entities. \n\n Text: {text}"
+    return f"Extract all entities of type [{ent_types_str}] and find relations of type [{r_types_str}] among the extracted entities. Text: {text}"
 
 
 def build_boundary_joint_encoder_input(

@@ -70,7 +70,19 @@ def build_graph(
         raise ValueError(f"Unknown variant {variant!r}.")
 
     if random_graph: 
-        random.shuffle(ent_blocks)
+        for old_idx, ent in enumerate(ent_blocks):
+            ent['_old_idx'] = old_idx
+        shuffled_blocks = random.sample(ent_blocks, len(ent_blocks))
+        old_to_new = {ent['_old_idx']: new_idx for new_idx, ent in enumerate(shuffled_blocks)}
+        for ent in shuffled_blocks:
+            new_rels = []
+            for r in ent.get('relations', []):
+                new_r = dict(r)
+                new_r['tail_id'] = old_to_new[r['tail_id']]
+                new_rels.append(new_r)
+            ent['relations'] = new_rels
+            ent.pop('_old_idx', None)
+        ent_blocks = shuffled_blocks
 
     parts = []
 
@@ -194,10 +206,10 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
             continue
 
         if token == '<e_type>':
-            if state in ('READ_ENT_TEXT', 'IDLE'):
-                state = 'READ_ENT_TYPE'
-            elif state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE'):
+            if state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE', 'EXPECT_TAIL_TYPE'):
                 state = 'READ_TAIL_TYPE'
+            elif state in ('READ_ENT_TEXT', 'IDLE'):
+                state = 'READ_ENT_TYPE'
             i += 1
             continue
 
@@ -229,7 +241,7 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
                     entities[current_head_idx]['relations'].append(current_rel)
                 if not entities[current_tail_idx]['text']:
                     entities[current_tail_idx]['text'] = token
-            state = 'IDLE'
+            state = 'EXPECT_TAIL_TYPE'
         elif state == 'READ_TAIL_TYPE' and current_tail_idx is not None:
             if not entities[current_tail_idx]['type']:
                 entities[current_tail_idx]['type'] = token
@@ -237,8 +249,7 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
 
         i += 1
 
-    cleaned_entities = [e for e in entities if e['text']]
-    return cleaned_entities, rejected
+    return entities, rejected
 
 
 def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Tuple[str, str, str]]:

@@ -105,7 +105,8 @@ class GenerateTextSamplesCallback(TrainerCallback):
         if wandb.run is None: 
             return
 
-        batch = self.collator(self.sample_batch)
+        eval_collator = self.collator.to_eval_mode()
+        batch = eval_collator(self.sample_batch)
         device = next(model.parameters()).device
         k, dtype = self.variant, next(model.parameters()).dtype
 
