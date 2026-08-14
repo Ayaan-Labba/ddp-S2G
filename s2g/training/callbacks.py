@@ -183,8 +183,8 @@ class GenerateTextSamplesCallback(TrainerCallback):
             # Format triplets
             p_triplets = extract_triplets(p_ent, include_types=include_types)
             g_triplets = extract_triplets(g_ent, include_types=include_types)
-            p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
-            g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
+            p_t = "\n".join([f"{t[0]} --[{t[1]}]--> {t[2]}" for t in p_triplets]) if p_triplets else "(none)"
+            g_t = "\n".join([f"{t[0]} --[{t[1]}]--> {t[2]}" for t in g_triplets]) if g_triplets else "(none)"
 
             row.extend([p_e, g_e, p_t, g_t, p_graph, g_graph])
             rows.append(row)
