@@ -20,32 +20,44 @@ EntityMention = Tuple[int, str]             # (head_idx, entity_type)
 EntityBlock = Dict[str, Any]
 
 
-def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[int], List[EntityMention]]:
+def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Tuple], List[Tuple], List[Tuple], List[Tuple]]:
     """
-    Single-pass extraction of all evaluation elements (indexed by position) from a sentence's EntityBlocks.
+    Single-pass extraction of text-validated evaluation elements from a sentence's EntityBlocks.
+    Binds entity text to the unique block index h_idx: (text, h_idx).
     """
-    triplets: List[Triplet] = []
-    quintuples: List[Quintuple] = []
-    entities: List[int] = []
-    mentions: List[EntityMention] = []
+    triplets: List[Tuple] = []
+    quintuples: List[Tuple] = []
+    entities: List[Tuple] = []
+    mentions: List[Tuple] = []
 
     for h_idx, ent in enumerate(blocks):
+        h_text = ent.get('text', '').strip()
         h_type = ent.get('type', '')
-        
-        entities.append(h_idx)
+
+        if not h_text:
+            continue
+
+        # Entity boundary match: (head_text, h_idx)
+        entities.append((h_text, h_idx))
         if h_type:
-            mentions.append((h_idx, h_type))
+            # Entity strict match: (head_text, head_type, h_idx)
+            mentions.append((h_text, h_type, h_idx))
 
         for rel in ent.get('relations', []):
             r_type = rel.get('type', '')
             t_idx = rel.get('tail_id')
 
             if t_idx is not None and t_idx < len(blocks):
-                t_type = blocks[t_idx].get('type', '')
-                if r_type:
-                    triplets.append((h_idx, r_type, t_idx))
+                t_ent = blocks[t_idx]
+                t_text = t_ent.get('text', '').strip()
+                t_type = t_ent.get('type', '')
+
+                if t_text and r_type:
+                    # Triplet (Relation boundary): (head_text, rel_type, tail_text, (h_idx, t_idx))
+                    triplets.append((h_text, r_type, t_text, (h_idx, t_idx)))
                     if h_type and t_type:
-                        quintuples.append((h_idx, h_type, r_type, t_idx, t_type))
+                        # Quintuple (Relation strict): (head_text, head_type, rel_type, tail_text, tail_type, (h_idx, t_idx))
+                        quintuples.append((h_text, h_type, r_type, t_text, t_type, (h_idx, t_idx)))
 
     return triplets, quintuples, entities, mentions
 

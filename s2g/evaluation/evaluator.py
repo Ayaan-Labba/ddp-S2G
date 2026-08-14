@@ -126,14 +126,13 @@ class S2GEvaluator:
         all_pred_blocks: List[List[EntityBlock]] = []
         all_gold_blocks: List[List[EntityBlock]] = []
 
-        batch_size = dataloader.batch_size
         logger.info("Evaluating split '%s' using streaming DataLoader...", split)
 
         with open(results_file, 'w', encoding='utf-8') as f_out, torch.inference_mode():
-            for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Evaluating ({split})")):
-                start_idx = batch_idx * batch_size
-                end_idx = min(start_idx + batch_size, len(dataset))
-                batch_instances = [dataset[i] for i in range(start_idx, end_idx)]
+            for batch in tqdm(dataloader, desc=f"Evaluating ({split})"):
+                batch_instances = batch.pop('instances') if 'instances' in batch else [
+                    dataset[i] for i in range(len(all_pred_blocks), len(all_pred_blocks) + len(batch['input_ids']))
+                ]
 
                 input_ids = batch['input_ids'].to(device, non_blocking=True)
                 attention_mask = batch['attention_mask'].to(device, non_blocking=True)
