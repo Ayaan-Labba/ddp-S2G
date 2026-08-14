@@ -1,5 +1,5 @@
 """
-Linearised graph construction and parsing for Sentinel Branch (Tail ID format).
+Linearised graph construction and parsing for Sentinel Branch (with static <tail> token).
 """
 from __future__ import annotations
 
@@ -92,7 +92,8 @@ def build_graph(
                 tail_text = ent_blocks[tail_idx]['text']
                 
                 rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
-                ent_tokens.extend([rel_token, rel['type'], tail_sentinel, tail_text])
+                tail_token = tokens.token_strs['tail']
+                ent_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
                 
             parts.append(" ".join(ent_tokens))
 
@@ -117,15 +118,16 @@ def build_graph(
                 tail_type = ent_blocks[tail_idx].get('type', '')
 
                 rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
+                tail_token = tokens.token_strs['tail']
                 
                 if variant == 're':
                     ent_tokens.extend([
                         rel_token, rel['type'], 
-                        tail_sentinel, tail_text, 
+                        tail_token, tail_sentinel, tail_text, 
                         tokens.token_strs['e_type'], tail_type
                     ])
                 else:
-                    ent_tokens.extend([rel_token, rel['type'], tail_sentinel, tail_text])
+                    ent_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
             parts.append(" ".join(ent_tokens))
 
     if use_rejection:
@@ -142,9 +144,9 @@ def build_graph(
 
 def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
-    Complete state-machine parser for linearised target graphs in Sentinel Branch (Tail ID format).
+    Complete state-machine parser for linearised target graphs in Sentinel Branch (with static <tail> token).
     """
-    sentinel_pattern = re.compile(r'(<extra_id_\d+>|<e_type>|<r_type>|<nr_type>|<null>)')
+    sentinel_pattern = re.compile(r'(<extra_id_\d+>|<e_type>|<r_type>|<nr_type>|<tail>|<null>)')
     raw_tokens = [t.strip() for t in sentinel_pattern.split(text) if t.strip()]
 
     entities: List[EntityBlock] = []
@@ -202,6 +204,11 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
         if token in ('<r_type>', '<nr_type>'):
             state = 'READ_REL_TYPE'
             current_rel = {'type': '', 'tail_id': None}
+            i += 1
+            continue
+
+        if token == '<tail>':
+            state = 'EXPECT_TAIL_SENTINEL'
             i += 1
             continue
 

@@ -1,5 +1,5 @@
 """
-Special token registry for the S2G model (Sentinel Branch).
+Special token registry for the S2G model (Sentinel Branch with static <tail> token).
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from transformers import AutoModel, AutoTokenizer
 import torch
 
 # Explicit special tokens added to model vocabulary
-ALL_TOKEN_NAMES: List[str] = ['e_type', 'r_type', 'nr_type', 'null']
+ALL_TOKEN_NAMES: List[str] = ['e_type', 'r_type', 'nr_type', 'tail', 'null']
 VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
 
@@ -17,14 +17,15 @@ class S2GTokens:
         'e_type':   '<e_type>', 
         'r_type':   '<r_type>', 
         'nr_type':  '<nr_type>',
+        'tail':     '<tail>',
         'null':     '<null>'
     }
 
     base_tok_map = {
-        're':             {'e_type', 'r_type', 'nr_type'},
-        'boundary_re':    {'r_type', 'nr_type'},
-        'boundary_joint': {'r_type', 'nr_type'},
-        'joint':          {'e_type', 'r_type', 'nr_type'},
+        're':             {'e_type', 'r_type', 'nr_type', 'tail'},
+        'boundary_re':    {'r_type', 'nr_type', 'tail'},
+        'boundary_joint': {'r_type', 'nr_type', 'tail'},
+        'joint':          {'e_type', 'r_type', 'nr_type', 'tail'},
     }
 
     def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:
@@ -61,6 +62,7 @@ def add_special_tokens_to_tokenizer(
                 'e_type':   'entity type: ',
                 'r_type':   'relation: ',
                 'nr_type':  'next relation: ',
+                'tail':     'object: ',
                 'null':     'not found: ',
             }
 
