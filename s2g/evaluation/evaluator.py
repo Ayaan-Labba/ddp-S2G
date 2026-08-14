@@ -56,35 +56,51 @@ class S2GEvaluator:
         cleaned = self.clean_text(text)
         return parse_graph(cleaned, tok=self.tokens)
 
-    def process_batch_predictions(
-        self, batch_instances: List[Dict[str, Any]], 
-        generated_ids: torch.Tensor
-    ) -> Tuple[List[List[EntityBlock]], List[Dict[str, Any]]]:
+    def process_batch_outputs(
+        self,
+        input_ids: torch.Tensor,
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[List[List[EntityBlock]], List[List[EntityBlock]], List[Dict[str, Any]]]:
         """
-        Decodes generated token IDs, parses graph blocks, and formats per-instance records.
+        Decodes generated IDs and target label IDs, parses predicted and gold graph blocks,
+        and formats per-instance evaluation records directly from batch tensors.
         """
         preds = generated_ids.cpu().numpy()
         preds = np.where(preds != -100, preds, self.tokenizer.pad_token_id)
         decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=False)
 
+        lbls = labels.cpu().numpy()
+        lbls = np.where(lbls != -100, lbls, self.tokenizer.pad_token_id)
+        decoded_golds = self.tokenizer.batch_decode(lbls, skip_special_tokens=False)
+
+        inps = input_ids.cpu().numpy()
+        inps = np.where(inps != -100, inps, self.tokenizer.pad_token_id)
+        decoded_inputs = self.tokenizer.batch_decode(inps, skip_special_tokens=True)
+
         batch_pred_blocks = []
+        batch_gold_blocks = []
         batch_records = []
 
-        for inst, raw_pred in zip(batch_instances, decoded_preds):
-            parsed_ents, rejected = self.parse_text(raw_pred)
-            batch_pred_blocks.append(parsed_ents)
+        for raw_inp, raw_pred, raw_gold in zip(decoded_inputs, decoded_preds, decoded_golds):
+            pred_ents, rejected = self.parse_text(raw_pred)
+            gold_ents, _ = self.parse_text(raw_gold)
+
+            batch_pred_blocks.append(pred_ents)
+            batch_gold_blocks.append(gold_ents)
+
             batch_records.append(
                 {
-                    'text': inst.get('text', ""),
+                    'text': self.clean_text(raw_inp),
                     'prediction_raw': self.clean_text(raw_pred),
-                    'parsed_blocks': parsed_ents,
+                    'gold_raw': self.clean_text(raw_gold),
+                    'parsed_pred_blocks': pred_ents,
+                    'parsed_gold_blocks': gold_ents,
                     'rejected': rejected,
-                    'gold_entities': inst.get('entities', []),
-                    'gold_relations': inst.get('relations', []),
                 }
             )
 
-        return batch_pred_blocks, batch_records
+        return batch_pred_blocks, batch_gold_blocks, batch_records
 
     def compute_final_metrics(
         self, 
@@ -130,12 +146,9 @@ class S2GEvaluator:
 
         with open(results_file, 'w', encoding='utf-8') as f_out, torch.inference_mode():
             for batch in tqdm(dataloader, desc=f"Evaluating ({split})"):
-                batch_instances = batch.pop('instances') if 'instances' in batch else [
-                    dataset[i] for i in range(len(all_pred_blocks), len(all_pred_blocks) + len(batch['input_ids']))
-                ]
-
                 input_ids = batch['input_ids'].to(device, non_blocking=True)
                 attention_mask = batch['attention_mask'].to(device, non_blocking=True)
+                labels = batch['labels']
 
                 dtype = next(model.parameters()).dtype
                 ctx = (
@@ -170,15 +183,13 @@ class S2GEvaluator:
                 with ctx:
                     generated_ids = model.generate(**gen_kwargs)
 
-                pred_blocks, batch_records = self.process_batch_predictions(batch_instances, generated_ids)
+                pred_blocks, gold_blocks, batch_records = self.process_batch_outputs(
+                    input_ids=input_ids,
+                    generated_ids=generated_ids,
+                    labels=labels,
+                )
                 all_pred_blocks.extend(pred_blocks)
-
-                ent_schema_set = set(self.ent_schema)
-                rel_schema_set = set(self.rel_schema)
-
-                for inst in batch_instances:
-                    gold_ents = organise_filter_and_block(inst['entities'], inst['relations'], ent_schema_set, rel_schema_set)
-                    all_gold_blocks.append(gold_ents)
+                all_gold_blocks.extend(gold_blocks)
 
                 for record in batch_records:
                     f_out.write(json.dumps(record, ensure_ascii=False) + "\n")

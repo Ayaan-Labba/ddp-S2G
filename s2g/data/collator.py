@@ -72,10 +72,7 @@ class S2GCollator:
             encoder_inputs.append(enc)
             decoder_targets.append(dec)
 
-        res = self.tokenize(encoder_inputs, decoder_targets)
-        if getattr(self, 'is_eval', False):
-            res['instances'] = batch
-        return res
+        return self.tokenize(encoder_inputs, decoder_targets)
 
     def prepare_re(self, inst: Dict) -> Tuple[str, str]:
         pos_ent, neg_ent = self.sample_types(
@@ -232,11 +229,9 @@ class S2GCollator:
         eval_cfg = dict(self.cfg)
         eval_cfg['mode'] = 'budget'
         
-        collator = S2GCollator(
+        return S2GCollator(
             tokenizer=self.tokenizer,
             ent_schema=self.ent_schema,
             rel_schema=self.rel_schema,
             config=eval_cfg,
         )
-        collator.is_eval = True
-        return collator
