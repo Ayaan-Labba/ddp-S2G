@@ -245,17 +245,21 @@ def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -
     if include_types:
         res = []
         for h_idx, ent in enumerate(entities):
+            h_text = ent.get('text', '?')
+            h_type = ent.get('type', '?')
             for rel in ent.get('relations', []):
                 t_idx = rel['tail_id']
+                t_text = entities[t_idx].get('text', '?') if t_idx < len(entities) else '?'
                 t_type = entities[t_idx].get('type', '?') if t_idx < len(entities) else '?'
                 res.append((
-                    f"{h_idx} [{ent.get('type')}]", 
+                    f"({h_idx}, {h_text}) [{h_type}]", 
                     rel['type'], 
-                    f"{t_idx} [{t_type}]"
+                    f"({t_idx}, {t_text}) [{t_type}]"
                 ))
         return res
     
-    return [(h_idx, rel['type'], rel['tail_id']) for h_idx, ent in enumerate(entities) for rel in ent.get('relations', [])]
+    return [(f"({h_idx}, {ent.get('text')})", rel['type'], f"({rel['tail_id']}, {entities[rel['tail_id']].get('text')})") 
+            for h_idx, ent in enumerate(entities) for rel in ent.get('relations', [])]
 
 
 def append_null_block(
