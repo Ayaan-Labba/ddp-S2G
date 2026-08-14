@@ -156,11 +156,11 @@ def compute_metrics_for_variant(
     ent_set = set(ent_schema) if ent_schema else None
 
     if rel_set is not None:
-        all_pred_triplets = [[t for t in sent if t[1] in rel_set] for sent in all_pred_triplets]
-        all_pred_quintuples = [[q for q in sent if q[2] in rel_set] for sent in all_pred_quintuples]
+        all_pred_triplets = [[t for t in sent if t[2] in rel_set] for sent in all_pred_triplets]
+        all_pred_quintuples = [[q for q in sent if q[3] in rel_set] for sent in all_pred_quintuples]
 
     if ent_set is not None:
-        all_pred_entity_mentions = [[m for m in sent if m[1] in ent_set] for sent in all_pred_entity_mentions]
+        all_pred_entity_mentions = [[m for m in sent if m[2] in ent_set] for sent in all_pred_entity_mentions]
 
     # Compute metrics
     m: Dict[str, float] = {}
@@ -175,7 +175,7 @@ def compute_metrics_for_variant(
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, "ner"))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[2], ent_schema, "ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
@@ -183,7 +183,7 @@ def compute_metrics_for_variant(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
-        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[2], rel_schema, "boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
@@ -191,6 +191,6 @@ def compute_metrics_for_variant(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
-        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
+        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[3], rel_schema, "strict"))
 
     return m

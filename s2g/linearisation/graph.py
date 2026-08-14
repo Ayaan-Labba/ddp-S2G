@@ -241,25 +241,33 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
     return cleaned_entities, rejected
 
 
-def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Triplet]:
-    if include_types:
-        res = []
-        for h_idx, ent in enumerate(entities):
-            h_text = ent.get('text', '?')
-            h_type = ent.get('type', '?')
-            for rel in ent.get('relations', []):
-                t_idx = rel['tail_id']
-                t_text = entities[t_idx].get('text', '?') if t_idx < len(entities) else '?'
-                t_type = entities[t_idx].get('type', '?') if t_idx < len(entities) else '?'
+def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Tuple]:
+    ent_map = {idx: ent for idx, ent in enumerate(entities) if ent.get('text')}
+    res = []
+    for h_idx, ent in enumerate(entities):
+        if not ent.get('text'):
+            continue
+        h_text = ent.get('text', '?')
+        h_type = ent.get('type', '?')
+        for rel in ent.get('relations', []):
+            t_idx = rel.get('tail_id')
+            t_ent = ent_map.get(t_idx, {})
+            t_text = t_ent.get('text', '?')
+            t_type = t_ent.get('type', '?')
+
+            if include_types:
                 res.append((
                     f"({h_idx}, {h_text}) [{h_type}]", 
                     rel['type'], 
                     f"({t_idx}, {t_text}) [{t_type}]"
                 ))
-        return res
-    
-    return [(f"({h_idx}, {ent.get('text')})", rel['type'], f"({rel['tail_id']}, {entities[rel['tail_id']].get('text')})") 
-            for h_idx, ent in enumerate(entities) for rel in ent.get('relations', [])]
+            else:
+                res.append((
+                    f"({h_idx}, {h_text})", 
+                    rel['type'], 
+                    f"({t_idx}, {t_text})"
+                ))
+    return res
 
 
 def append_null_block(
