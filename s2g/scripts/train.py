@@ -214,6 +214,7 @@ def main() -> None:
         tokens=tokens,
         callbacks=callbacks,
         args=training_args,
+        scheduler_type=cfg.scheduler.type,
     )
 
     trainer.train(resume_from_checkpoint=cfg.checkpoint.resume_from)

@@ -19,11 +19,12 @@ def organise_filter_and_block(
         entities: List, 
         relations: List, 
         allowed_ent_types: Set[str], 
-        allowed_rel_types: Set[str]
+        allowed_rel_types: Set[str],
+        use_types: bool = True
     ) -> List[EntityBlock]:
 
     # Filter entities and relations
-    filtered_ents = [e for e in entities if e['type'] in allowed_ent_types]
+    filtered_ents = [e for e in entities if e['type'] in allowed_ent_types] if use_types else list(entities)
     valid_offsets = {tuple(e['offset']) for e in filtered_ents}
     filtered_rels = [
         r for r in relations
@@ -87,27 +88,45 @@ def build_graph(
     parts = []
 
     if variant in {'joint', 'boundary_joint'}:
+        # 1. Entities Section
+        ent_parts = []
         for idx, ent in enumerate(ent_blocks):
             ent_sentinel = S2GTokens.sentinel_token(idx)
             ent_tokens = [ent_sentinel, ent['text']]
-            
             if variant == 'joint' and ent.get('type'):
                 ent_tokens.extend([tokens.token_strs['e_type'], ent['type']])
-            
+            ent_parts.append(" ".join(ent_tokens))
+
+        # 2. Relations Section (omits non-head entities and omits entity types)
+        rel_parts = []
+        for idx, ent in enumerate(ent_blocks):
             rels = ent.get('relations', [])
+            if not rels:
+                continue
+
             if random_graph:
                 random.shuffle(rels)
+
+            head_sentinel = S2GTokens.sentinel_token(idx)
+            head_tokens = [head_sentinel, ent['text']]
 
             for i, rel in enumerate(rels):
                 tail_idx = rel['tail_id']
                 tail_sentinel = S2GTokens.sentinel_token(tail_idx)
                 tail_text = ent_blocks[tail_idx]['text']
-                
+
                 rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
                 tail_token = tokens.token_strs['tail']
-                ent_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
-                
-            parts.append(" ".join(ent_tokens))
+                head_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
+
+            rel_parts.append(" ".join(head_tokens))
+
+        # Combine Entities and Relations sections with <null> separator
+        if ent_parts or rel_parts:
+            parts.append(" ".join(ent_parts))
+            parts.append(tokens.token_strs['null'])
+            if rel_parts:
+                parts.append(" ".join(rel_parts))
 
     elif variant in {'re', 'boundary_re'}:
         for idx, ent in enumerate(ent_blocks):
@@ -151,12 +170,12 @@ def build_graph(
             random_graph=random_graph
         )
 
-    return " ".join(parts)
+    return " ".join(parts).strip()
 
 
 def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
-    Complete state-machine parser for linearised target graphs in Sentinel Branch (with static <tail> token).
+    Complete state-machine parser for linearised target graphs in Sentinel Branch (with Sectioned format and static <tail> token).
     """
     sentinel_pattern = re.compile(r'(<extra_id_\d+>|<e_type>|<r_type>|<nr_type>|<tail>|<null>)')
     raw_tokens = [t.strip() for t in sentinel_pattern.split(text) if t.strip()]
@@ -172,6 +191,7 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
     current_head_idx: Optional[int] = None
     current_rel: Optional[Dict[str, Any]] = None
     current_tail_idx: Optional[int] = None
+    section: str = 'ENTITIES'  # 'ENTITIES' | 'RELATIONS' | 'NULL'
     state: str = 'IDLE'
 
     i = 0
@@ -179,11 +199,19 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
         token = raw_tokens[i]
 
         if token == '<null>':
-            state = 'NULL'
+            if section == 'ENTITIES':
+                section = 'RELATIONS'
+                state = 'IDLE'
+                current_head_idx = None
+                current_rel = None
+                current_tail_idx = None
+            else:
+                section = 'NULL'
+                state = 'NULL'
             i += 1
             continue
 
-        if state == 'NULL':
+        if section == 'NULL' or state == 'NULL':
             rejected.append(token)
             state = 'IDLE'
             i += 1
@@ -197,11 +225,15 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
                 current_tail_idx = sent_idx
                 get_or_create_entity(sent_idx)
                 state = 'READ_TAIL_TEXT'
-            else:
+            elif section == 'ENTITIES':
                 current_head_idx = sent_idx
                 ent = get_or_create_entity(sent_idx)
                 ent['text'] = ''
                 state = 'READ_ENT_TEXT'
+            else:  # section == 'RELATIONS'
+                current_head_idx = sent_idx
+                get_or_create_entity(sent_idx)
+                state = 'READ_REL_HEAD_TEXT'
             i += 1
             continue
 
@@ -214,6 +246,8 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
             continue
 
         if token in ('<r_type>', '<nr_type>'):
+            # In case variant is re/boundary_re without <null>, transition to RELATIONS section
+            section = 'RELATIONS'
             state = 'READ_REL_TYPE'
             current_rel = {'type': '', 'tail_id': None}
             i += 1
@@ -231,9 +265,11 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
         elif state == 'READ_ENT_TYPE' and current_head_idx is not None:
             entities[current_head_idx]['type'] = token
             state = 'IDLE'
+        elif state == 'READ_REL_HEAD_TEXT' and current_head_idx is not None:
+            if not entities[current_head_idx]['text']:
+                entities[current_head_idx]['text'] = token
         elif state == 'READ_REL_TYPE' and current_rel is not None:
-            current_rel['type'] = token
-            state = 'EXPECT_TAIL_SENTINEL'
+            current_rel['type'] = f"{current_rel['type']} {token}".strip() if current_rel['type'] else token
         elif state == 'READ_TAIL_TEXT' and current_rel is not None:
             if current_tail_idx is not None:
                 current_rel['tail_id'] = current_tail_idx

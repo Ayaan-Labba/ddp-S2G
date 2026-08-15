@@ -44,14 +44,14 @@ Entities sorted by text offset are assigned sequential sentinel tokens (`<extra_
 * **Text**: *"Barack Obama was born in Honolulu and served as the president of the United States"*
 * **Entities**: Barack Obama (person, idx 0), Honolulu (city, idx 1), United States (country, idx 2)
 
-#### 1. `joint` (Nested)
+#### 1. `joint` (Sectioned)
 ```text
-<extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> <extra_id_2> United States <extra_id_2> United States <e_type> country
+<extra_id_0> Barack Obama <e_type> person <extra_id_1> Honolulu <e_type> city <extra_id_2> United States <e_type> country <null> <extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States
 ```
 
-#### 2. `boundary_joint` (Nested)
+#### 2. `boundary_joint` (Sectioned)
 ```text
-<extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States <extra_id_2> United States
+<extra_id_0> Barack Obama <extra_id_1> Honolulu <extra_id_2> United States <null> <extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States
 ```
 
 #### 3. `re`

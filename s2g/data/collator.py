@@ -86,7 +86,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel)
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), use_types=True
         )
         dec = build_graph(
             blocks, 're', self.tok, 
@@ -105,7 +105,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], self.ent_schema_set, set(pos_rel)
+            inst['entities'], inst['relations'], set(), set(pos_rel), use_types=False
         )
         dec = build_graph(
             blocks, 'boundary_re', self.tok, 
@@ -123,7 +123,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], self.ent_schema_set, set(pos_rel)
+            inst['entities'], inst['relations'], set(), set(pos_rel), use_types=False
         )
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
@@ -144,7 +144,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel)
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), use_types=True
         )
         dec = build_graph(
             blocks, 'joint', self.tok, 
@@ -197,10 +197,10 @@ class S2GCollator:
             return start + frac * (end - start)
             
         return (
-            lerp(self.cfg.get('positive_rate_start', 0.9), self.cfg.get('positive_rate_end', 0.9)),
-            lerp(self.cfg.get('negative_rate_start', 0.1), self.cfg.get('negative_rate_end', 0.1)),
+            lerp(self.cfg.get('pos_rate_start', 0.9), self.cfg.get('pos_rate_end', 0.9)),
+            lerp(self.cfg.get('neg_rate_start', 0.1), self.cfg.get('neg_rate_end', 0.1)),
             round(lerp(float(self.cfg.get('pos_max_start', 1)), float(self.cfg.get('pos_max_end', 20)))),
-            round(lerp(float(self.cfg.get('negative_max_start', 1)), float(self.cfg.get('negative_max_end', 20))))
+            round(lerp(float(self.cfg.get('neg_max_start', 1)), float(self.cfg.get('neg_max_end', 20))))
         )
 
     def tokenize(self, encoder_inputs: List[str], decoder_targets: List[str]) -> Dict[str, Any]:

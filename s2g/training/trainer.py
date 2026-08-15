@@ -29,6 +29,7 @@ class S2GTrainer(Seq2SeqTrainer):
         self.ent_schema         = kwargs.pop('ent_schema', [])
         self.rel_schema         = kwargs.pop('rel_schema', [])
         self.tokens             = kwargs.pop('tokens')
+        self.scheduler_type     = kwargs.pop('scheduler_type', None)
 
         super().__init__(compute_metrics=self.compute_metrics_hf, **kwargs)
 
@@ -50,7 +51,7 @@ class S2GTrainer(Seq2SeqTrainer):
         if self.lr_scheduler is not None:
             return
 
-        if self.args.lr_scheduler_type == 'inverse_sqrt':
+        if self.scheduler_type == 'inverse_sqrt' or self.args.lr_scheduler_type == 'inverse_sqrt':
             opt = optimizer if optimizer else self.optimizer
             warmup = self.args.get_warmup_steps(num_training_steps)
             self.lr_scheduler = LambdaLR(

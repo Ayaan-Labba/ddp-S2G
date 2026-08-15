@@ -24,8 +24,8 @@ class S2GTokens:
     base_tok_map = {
         're':             {'e_type', 'r_type', 'nr_type', 'tail'},
         'boundary_re':    {'r_type', 'nr_type', 'tail'},
-        'boundary_joint': {'r_type', 'nr_type', 'tail'},
-        'joint':          {'e_type', 'r_type', 'nr_type', 'tail'},
+        'boundary_joint': {'r_type', 'nr_type', 'tail', 'null'},
+        'joint':          {'e_type', 'r_type', 'nr_type', 'tail', 'null'},
     }
 
     def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:
