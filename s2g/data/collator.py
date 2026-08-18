@@ -86,7 +86,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), use_types=True
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), variant='re', use_types=True
         )
         dec = build_graph(
             blocks, 're', self.tok, 
@@ -105,7 +105,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(), set(pos_rel), use_types=False
+            inst['entities'], inst['relations'], set(), set(pos_rel), variant='boundary_re', use_types=False
         )
         dec = build_graph(
             blocks, 'boundary_re', self.tok, 
@@ -123,7 +123,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(), set(pos_rel), use_types=False
+            inst['entities'], inst['relations'], set(), set(pos_rel), variant='boundary_joint', use_types=False
         )
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
@@ -144,7 +144,7 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), use_types=True
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), variant='joint', use_types=True
         )
         dec = build_graph(
             blocks, 'joint', self.tok, 

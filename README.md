@@ -1,6 +1,6 @@
 # Sentence-to-Graph (S2G): Automatic Knowledge Graph Generation from Unstructured Text
 
-A seq2seq approach to joint entity and relation extraction framed as a text-to-text problem. The encoder receives a source sentence prefixed by natural language instructions or a **Schema-Structured Input (SSI)**. The decoder generates a linearised **Sentence-to-Graph** representation using **incrementing sentinel tokens** (`<extra_id_0>`, `<extra_id_1>`, ...) for entities in text offset order and dedicated vocabulary special tokens (`<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>`).
+A seq2seq approach to joint entity and relation extraction framed as a text-to-text problem. The encoder receives a source sentence prefixed by natural language instructions or a **Schema-Structured Input (SSI)**. The decoder generates a linearised **Sentence-to-Graph** representation using rolling sentinel tokens (`<extra_id_0>`, `<extra_id_1>`, ...) and dedicated vocabulary special tokens (`<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>`).
 
 Built on **Flan-T5 Base** (~250M parameters), pre-trained on [REBEL](https://huggingface.co/datasets/Babelscape/rebel-dataset), and fine-tuned on CoNLL04, NYT-multi, and SciERC.
 
@@ -16,7 +16,7 @@ configs/
 ├── finetune.yaml              # Benchmark fine-tuning defaults
 └── evaluate.yaml              # Evaluation decoding configurations
 s2g/
-├── linearisation/             # Incrementing sentinel linearisation, prompt builder & state-machine parser
+├── linearisation/             # Prompt builder, nested graph builder & state-machine parser
 │   ├── special_tokens.py      # Vocabulary special tokens (<e_type>, <r_type>, <nr_type>, <tail>, <null>)
 │   ├── graph.py               # Nested graph builder and FSM parser
 │   └── prompt.py              # Natural language & SSI prompt builders
@@ -38,30 +38,31 @@ README.md
 
 ## Linearisation & Graph Formats
 
-Entities sorted by text offset are assigned sequential sentinel tokens (`<extra_id_0>`, `<extra_id_1>`, ...). Relation targets feature the static `<tail>` special token preceding `<extra_id_i> tail_text`.
+Each entity block is introduced by a rolling sentinel token (`<extra_id_0>`, `<extra_id_1>`, ...). Relation targets feature the static `<tail>` special token directly followed by tail entity text. Entities without outgoing relations in joint variants emit `<r_type> none`. RE variants omit non-head entities.
 
 ### Example
 * **Text**: *"Barack Obama was born in Honolulu and served as the president of the United States"*
-* **Entities**: Barack Obama (person, idx 0), Honolulu (city, idx 1), United States (country, idx 2)
+* **Entities**: `Barack Obama` (person), `Honolulu` (city), `United States` (country)
+* **Relations**: `(Barack Obama, place of birth, Honolulu)`, `(Barack Obama, president of, United States)`, `(Honolulu, located in, United States)`
 
-#### 1. `joint` (Sectioned)
+#### 1. `joint` (Nested)
 ```text
-<extra_id_0> Barack Obama <e_type> person <extra_id_1> Honolulu <e_type> city <extra_id_2> United States <e_type> country <null> <extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States
+<extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <extra_id_2> United States <e_type> country <r_type> none
 ```
 
-#### 2. `boundary_joint` (Sectioned)
+#### 2. `boundary_joint` (Nested)
 ```text
-<extra_id_0> Barack Obama <extra_id_1> Honolulu <extra_id_2> United States <null> <extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States
+<extra_id_0> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <r_type> located in <tail> United States <extra_id_2> United States <r_type> none
 ```
 
 #### 3. `re`
 ```text
-<extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> <extra_id_1> Honolulu <e_type> city <nr_type> president of <tail> <extra_id_2> United States <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> <extra_id_2> United States <e_type> country
+<extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
 ```
 
 #### 4. `boundary_re`
 ```text
-<extra_id_0> Barack Obama <r_type> place of birth <tail> <extra_id_1> Honolulu <nr_type> president of <tail> <extra_id_2> United States <extra_id_1> Honolulu <r_type> located in <tail> <extra_id_2> United States
+<extra_id_0> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <r_type> located in <tail> United States
 ```
 
 ---
@@ -118,7 +119,7 @@ python -m s2g.scripts.evaluate \
 ## Metrics Computed
 
 `evaluate.py` computes micro and macro variants of:
-* **NER Boundary F1:** `(head_text, h_idx)` entity span and position index match.
-* **NER Strict F1:** `(head_text, head_type, h_idx)` entity span, type, and position index match.
-* **Relation Boundary F1:** `(head_text, rel_type, tail_text, (h_idx, t_idx))` triplet and position indices match.
-* **Relation Strict F1:** `(head_text, head_type, rel_type, tail_text, tail_type, (h_idx, t_idx))` quintuple and position indices match.
+* **NER Boundary F1:** `head_text` entity span match.
+* **NER Strict F1:** `(head_text, head_type)` entity span and type match.
+* **Relation Boundary F1:** `(head_text, rel_type, tail_text)` triplet match.
+* **Relation Strict F1:** `(head_text, head_type, rel_type, tail_text, tail_type)` quintuple match.

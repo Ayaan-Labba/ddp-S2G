@@ -11,7 +11,7 @@ from collections import defaultdict
 from .special_tokens import S2GTokens, VALID_VARIANTS
 
 EntityBlock = Dict[str, Any]
-Triplet = Tuple[int, str, int]
+Triplet = Tuple[str, str, str]
 RejectedItem = str
 
 
@@ -20,10 +20,11 @@ def organise_filter_and_block(
         relations: List, 
         allowed_ent_types: Set[str], 
         allowed_rel_types: Set[str],
+        variant: str = 'joint',
         use_types: bool = True
     ) -> List[EntityBlock]:
 
-    # Filter entities and relations
+    # 1. Filter entities and relations
     filtered_ents = [e for e in entities if e['type'] in allowed_ent_types] if use_types else list(entities)
     valid_offsets = {tuple(e['offset']) for e in filtered_ents}
     filtered_rels = [
@@ -33,28 +34,81 @@ def organise_filter_and_block(
         and tuple(r['tail']['offset']) in valid_offsets
     ]
     
-    # Sort filtered data by offset
+    # 2. Sort filtered data by offset
     filtered_ents.sort(key=lambda e: e['offset'])
     filtered_rels.sort(key=lambda r: (r['head']['offset'], r['tail']['offset']))
     
-    # Map tail entity offset to its position index in filtered_ents
-    offset_to_idx = {tuple(e['offset']): idx for idx, e in enumerate(filtered_ents)}
+    if variant in {'joint', 'boundary_joint'}:
+        # Deduplicate entities by text (preserving first occurrence offset order)
+        offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
+        deduped_ents: List[EntityBlock] = []
+        text_to_ent: Dict[str, EntityBlock] = {}
 
-    # Group sorted relations by head entity offset
-    rel_groups = defaultdict(list)
-    for rel in filtered_rels:
-        tail_idx = offset_to_idx[tuple(rel['tail']['offset'])]
-        rel_ = {'type': rel['type'], 'tail_id': tail_idx}
-        rel_groups[tuple(rel['head']['offset'])].append(rel_)
-        
-    # Pack into entity blocks
-    ent_blocks = []
-    for ent in filtered_ents:
-        ent_block = dict(ent)
-        ent_block['relations'] = rel_groups[tuple(ent['offset'])]
-        ent_blocks.append(ent_block)
-        
-    return ent_blocks
+        for ent in filtered_ents:
+            ent_text = ent['text']
+            if ent_text not in text_to_ent:
+                block: EntityBlock = {
+                    'text': ent_text,
+                    'type': ent.get('type') if use_types else None,
+                    'offset': ent['offset'],
+                    'relations': []
+                }
+                text_to_ent[ent_text] = block
+                deduped_ents.append(block)
+            offset_to_ent[tuple(ent['offset'])] = text_to_ent[ent_text]
+
+        # Group relations by deduplicated head entity
+        seen_rels = set()
+        for rel in filtered_rels:
+            head_block = offset_to_ent[tuple(rel['head']['offset'])]
+            tail_text = rel['tail']['text']
+            tail_type = rel['tail'].get('type') if use_types else None
+            rel_type = rel['type']
+            rel_key = (head_block['text'], rel_type, tail_text)
+            if rel_key not in seen_rels:
+                seen_rels.add(rel_key)
+                head_block['relations'].append({
+                    'type': rel_type,
+                    'tail_text': tail_text,
+                    'tail_type': tail_type
+                })
+
+        return deduped_ents
+
+    else:
+        # RE variants (re, boundary_re): only retain head entities, no text deduplication
+        head_offsets = {tuple(r['head']['offset']) for r in filtered_rels}
+        offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
+        head_blocks: List[EntityBlock] = []
+
+        for ent in filtered_ents:
+            offset_key = tuple(ent['offset'])
+            if offset_key in head_offsets:
+                block: EntityBlock = {
+                    'text': ent['text'],
+                    'type': ent.get('type') if use_types else None,
+                    'offset': ent['offset'],
+                    'relations': []
+                }
+                offset_to_ent[offset_key] = block
+                head_blocks.append(block)
+
+        seen_rels = set()
+        for rel in filtered_rels:
+            head_block = offset_to_ent[tuple(rel['head']['offset'])]
+            tail_text = rel['tail']['text']
+            tail_type = rel['tail'].get('type') if use_types else None
+            rel_type = rel['type']
+            rel_key = (id(head_block), rel_type, tail_text, tail_type)
+            if rel_key not in seen_rels:
+                seen_rels.add(rel_key)
+                head_block['relations'].append({
+                    'type': rel_type,
+                    'tail_text': tail_text,
+                    'tail_type': tail_type
+                })
+
+        return head_blocks
 
 
 def build_graph(
@@ -70,96 +124,64 @@ def build_graph(
     if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
 
+    if not ent_blocks:
+        return ""
+
     if random_graph: 
-        for old_idx, ent in enumerate(ent_blocks):
-            ent['_old_idx'] = old_idx
-        shuffled_blocks = random.sample(ent_blocks, len(ent_blocks))
-        old_to_new = {ent['_old_idx']: new_idx for new_idx, ent in enumerate(shuffled_blocks)}
-        for ent in shuffled_blocks:
-            new_rels = []
-            for r in ent.get('relations', []):
-                new_r = dict(r)
-                new_r['tail_id'] = old_to_new[r['tail_id']]
-                new_rels.append(new_r)
-            ent['relations'] = new_rels
-            ent.pop('_old_idx', None)
-        ent_blocks = shuffled_blocks
+        ent_blocks = random.sample(ent_blocks, len(ent_blocks))
 
     parts = []
 
     if variant in {'joint', 'boundary_joint'}:
-        # 1. Entities Section
-        ent_parts = []
-        for idx, ent in enumerate(ent_blocks):
-            ent_sentinel = S2GTokens.sentinel_token(idx)
-            ent_tokens = [ent_sentinel, ent['text']]
+        for ent_idx, ent in enumerate(ent_blocks):
+            sentinel = tokens.sentinel_token(ent_idx)
+            ent_toks = [sentinel, ent['text']]
             if variant == 'joint' and ent.get('type'):
-                ent_tokens.extend([tokens.token_strs['e_type'], ent['type']])
-            ent_parts.append(" ".join(ent_tokens))
+                ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
 
-        # 2. Relations Section (omits non-head entities and omits entity types)
-        rel_parts = []
-        for idx, ent in enumerate(ent_blocks):
             rels = ent.get('relations', [])
-            if not rels:
-                continue
+            if rels:
+                if random_graph:
+                    rels = random.sample(rels, len(rels))
+                for i, rel in enumerate(rels):
+                    rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
+                    tail_token = tokens.token_strs['tail']
+                    ent_toks.extend([rel_token, rel['type'], tail_token, rel['tail_text']])
+            else:
+                ent_toks.extend([tokens.token_strs['r_type'], 'none'])
 
-            if random_graph:
-                random.shuffle(rels)
-
-            head_sentinel = S2GTokens.sentinel_token(idx)
-            head_tokens = [head_sentinel, ent['text']]
-
-            for i, rel in enumerate(rels):
-                tail_idx = rel['tail_id']
-                tail_sentinel = S2GTokens.sentinel_token(tail_idx)
-                tail_text = ent_blocks[tail_idx]['text']
-
-                rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
-                tail_token = tokens.token_strs['tail']
-                head_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
-
-            rel_parts.append(" ".join(head_tokens))
-
-        # Combine Entities and Relations sections with <null> separator
-        if ent_parts or rel_parts:
-            parts.append(" ".join(ent_parts))
-            parts.append(tokens.token_strs['null'])
-            if rel_parts:
-                parts.append(" ".join(rel_parts))
+            parts.append(" ".join(ent_toks))
 
     elif variant in {'re', 'boundary_re'}:
-        for idx, ent in enumerate(ent_blocks):
+        for ent_idx, ent in enumerate(ent_blocks):
             rels = ent.get('relations', [])
             if not rels:
                 continue
 
-            if random_graph:
-                random.shuffle(rels)
-
-            ent_sentinel = S2GTokens.sentinel_token(idx)
-            ent_tokens = [ent_sentinel, ent['text']]
+            sentinel = tokens.sentinel_token(ent_idx)
+            ent_toks = [sentinel, ent['text']]
             if variant == 're' and ent.get('type'):
-                ent_tokens.extend([tokens.token_strs['e_type'], ent['type']])
+                ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
+
+            if random_graph:
+                rels = random.sample(rels, len(rels))
 
             for i, rel in enumerate(rels):
-                tail_idx = rel['tail_id']
-                tail_sentinel = S2GTokens.sentinel_token(tail_idx)
-                tail_text = ent_blocks[tail_idx]['text']
-                tail_type = ent_blocks[tail_idx].get('type', '')
-
                 rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
                 tail_token = tokens.token_strs['tail']
-                
+                tail_text = rel['tail_text']
+                tail_type = rel.get('tail_type', '')
+
                 if variant == 're':
-                    ent_tokens.extend([
+                    ent_toks.extend([
                         rel_token, rel['type'], 
-                        tail_token, tail_sentinel, tail_text, 
+                        tail_token, tail_text, 
                         tokens.token_strs['e_type'], tail_type
                     ])
                 else:
-                    ent_tokens.extend([rel_token, rel['type'], tail_token, tail_sentinel, tail_text])
-            parts.append(" ".join(ent_tokens))
+                    ent_toks.extend([rel_token, rel['type'], tail_token, tail_text])
+
+            parts.append(" ".join(ent_toks))
 
     if use_rejection:
         append_null_block(
@@ -173,9 +195,27 @@ def build_graph(
     return " ".join(parts).strip()
 
 
+def deduplicate_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
+    seen: Dict[str, int] = {}
+    deduped: List[EntityBlock] = []
+    for ent in entities:
+        if not ent.get('text'):
+            continue
+        text_key = ent["text"].strip()
+        if text_key in seen:
+            target = deduped[seen[text_key]]
+            if not target.get('type') and ent.get('type'):
+                target['type'] = ent['type']
+            target["relations"].extend(ent.get("relations", []))
+        else:
+            seen[text_key] = len(deduped)
+            deduped.append(ent)
+    return deduped
+
+
 def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
-    Complete state-machine parser for linearised target graphs in Sentinel Branch (with Sectioned format and static <tail> token).
+    State-machine parser for nested linearised target graphs.
     """
     sentinel_pattern = re.compile(r'(<extra_id_\d+>|<e_type>|<r_type>|<nr_type>|<tail>|<null>)')
     raw_tokens = [t.strip() for t in sentinel_pattern.split(text) if t.strip()]
@@ -190,71 +230,60 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
 
     current_head_idx: Optional[int] = None
     current_rel: Optional[Dict[str, Any]] = None
-    current_tail_idx: Optional[int] = None
-    section: str = 'ENTITIES'  # 'ENTITIES' | 'RELATIONS' | 'NULL'
     state: str = 'IDLE'
+
+    def flush_rel():
+        nonlocal current_rel
+        if current_rel is not None and current_head_idx is not None and current_head_idx < len(entities):
+            if current_rel.get('type') and current_rel.get('tail_text'):
+                entities[current_head_idx]['relations'].append(current_rel)
+            current_rel = None
 
     i = 0
     while i < len(raw_tokens):
         token = raw_tokens[i]
 
         if token == '<null>':
-            if section == 'ENTITIES':
-                section = 'RELATIONS'
-                state = 'IDLE'
-                current_head_idx = None
-                current_rel = None
-                current_tail_idx = None
-            else:
-                section = 'NULL'
-                state = 'NULL'
+            flush_rel()
+            state = 'NULL'
             i += 1
             continue
 
-        if section == 'NULL' or state == 'NULL':
+        if state == 'NULL':
             rejected.append(token)
             state = 'IDLE'
             i += 1
             continue
 
-        match = re.match(r'<extra_id_(\d+)>', token)
-        if match:
-            sent_idx = int(match.group(1))
+        if token.startswith('<extra_id_') and token.endswith('>'):
+            idx_str = token[10:-1]
+            sent_idx = int(idx_str) if idx_str.isdigit() else len(entities)
 
-            if state in ('EXPECT_TAIL_SENTINEL', 'EXPECT_TAIL_TEXT'):
-                current_tail_idx = sent_idx
-                get_or_create_entity(sent_idx)
-                state = 'READ_TAIL_TEXT'
-            elif section == 'ENTITIES':
-                current_head_idx = sent_idx
-                ent = get_or_create_entity(sent_idx)
-                ent['text'] = ''
-                state = 'READ_ENT_TEXT'
-            else:  # section == 'RELATIONS'
-                current_head_idx = sent_idx
-                get_or_create_entity(sent_idx)
-                state = 'READ_REL_HEAD_TEXT'
+            flush_rel()
+            current_head_idx = sent_idx
+            ent = get_or_create_entity(sent_idx)
+            ent['text'] = ''
+            state = 'READ_ENT_TEXT'
             i += 1
             continue
 
         if token == '<e_type>':
-            if state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE', 'EXPECT_TAIL_TYPE'):
+            if state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE'):
                 state = 'READ_TAIL_TYPE'
-            elif state in ('READ_ENT_TEXT', 'IDLE'):
+            else:
                 state = 'READ_ENT_TYPE'
             i += 1
             continue
 
         if token in ('<r_type>', '<nr_type>'):
-            # In case variant is re/boundary_re without <null>, transition to RELATIONS section
-            section = 'RELATIONS'
+            flush_rel()
             state = 'READ_REL_TYPE'
-            current_rel = {'type': '', 'tail_id': None}
+            current_rel = {'type': '', 'tail_text': '', 'tail_type': None}
             i += 1
             continue
 
         if token == '<tail>':
-            state = 'EXPECT_TAIL_SENTINEL'
+            state = 'READ_TAIL_TEXT'
             i += 1
             continue
 
@@ -265,49 +294,88 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
         elif state == 'READ_ENT_TYPE' and current_head_idx is not None:
             entities[current_head_idx]['type'] = token
             state = 'IDLE'
-        elif state == 'READ_REL_HEAD_TEXT' and current_head_idx is not None:
-            if not entities[current_head_idx]['text']:
-                entities[current_head_idx]['text'] = token
         elif state == 'READ_REL_TYPE' and current_rel is not None:
-            current_rel['type'] = f"{current_rel['type']} {token}".strip() if current_rel['type'] else token
+            if token.strip().lower() == 'none' and not current_rel['type']:
+                current_rel = None
+                state = 'IDLE'
+            else:
+                current_rel['type'] = f"{current_rel['type']} {token}".strip() if current_rel['type'] else token
         elif state == 'READ_TAIL_TEXT' and current_rel is not None:
-            if current_tail_idx is not None:
-                current_rel['tail_id'] = current_tail_idx
-                if current_head_idx is not None:
-                    entities[current_head_idx]['relations'].append(current_rel)
-                if not entities[current_tail_idx]['text']:
-                    entities[current_tail_idx]['text'] = token
-            state = 'EXPECT_TAIL_TYPE'
-        elif state == 'READ_TAIL_TYPE' and current_tail_idx is not None:
-            if not entities[current_tail_idx]['type']:
-                entities[current_tail_idx]['type'] = token
+            current_rel['tail_text'] = f"{current_rel['tail_text']} {token}".strip() if current_rel['tail_text'] else token
+        elif state == 'READ_TAIL_TYPE' and current_rel is not None:
+            current_rel['tail_type'] = token
             state = 'IDLE'
 
         i += 1
 
-    return entities, rejected
+    flush_rel()
+
+    valid_entities = [e for e in entities if e.get('text')]
+
+    if tok.variant in {'joint', 'boundary_joint'}:
+        deduped_entities = deduplicate_entities(valid_entities)
+
+        ent_by_text: Dict[str, EntityBlock] = {
+            ent['text'].strip(): ent 
+            for ent in deduped_entities 
+            if ent.get('text')
+        }
+
+        for ent in list(deduped_entities):
+            for rel in ent.get('relations', []):
+                t_text = rel.get('tail_text', '').strip()
+                if not t_text:
+                    continue
+                if t_text not in ent_by_text:
+                    new_ent: EntityBlock = {'text': t_text, 'type': rel.get('tail_type'), 'relations': []}
+                    deduped_entities.append(new_ent)
+                    ent_by_text[t_text] = new_ent
+                elif not ent_by_text[t_text].get('type') and rel.get('tail_type'):
+                    ent_by_text[t_text]['type'] = rel.get('tail_type')
+
+        return deduped_entities, rejected
+
+    else:
+        ent_by_text: Dict[str, EntityBlock] = {
+            ent['text'].strip(): ent 
+            for ent in valid_entities 
+            if ent.get('text')
+        }
+
+        for ent in list(valid_entities):
+            for rel in ent.get('relations', []):
+                t_text = rel.get('tail_text', '').strip()
+                if not t_text:
+                    continue
+                if t_text not in ent_by_text:
+                    new_ent: EntityBlock = {'text': t_text, 'type': rel.get('tail_type'), 'relations': []}
+                    valid_entities.append(new_ent)
+                    ent_by_text[t_text] = new_ent
+                elif not ent_by_text[t_text].get('type') and rel.get('tail_type'):
+                    ent_by_text[t_text]['type'] = rel.get('tail_type')
+
+        return valid_entities, rejected
 
 
 def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Tuple[str, str, str]]:
-    ent_map = {idx: ent for idx, ent in enumerate(entities) if ent.get('text')}
+    ent_map = {ent['text'].strip(): ent for ent in entities if ent.get('text')}
     res = []
-    for h_idx, ent in enumerate(entities):
+    for ent in entities:
         if not ent.get('text'):
             continue
         h_text = ent.get('text', '?')
         h_type = ent.get('type', '')
         for rel in ent.get('relations', []):
-            t_idx = rel.get('tail_id')
-            t_ent = ent_map.get(t_idx, {})
-            t_text = t_ent.get('text', '?')
-            t_type = t_ent.get('type', '')
+            t_text = rel.get('tail_text', '?')
+            t_ent = ent_map.get(t_text, {})
+            t_type = rel.get('tail_type') or t_ent.get('type', '')
 
             if include_types:
-                h_str = f"({h_idx}, {h_text}) [{h_type}]" if h_type else f"({h_idx}, {h_text})"
-                t_str = f"({t_idx}, {t_text}) [{t_type}]" if t_type else f"({t_idx}, {t_text})"
+                h_str = f"{h_text} [{h_type}]" if h_type else h_text
+                t_str = f"{t_text} [{t_type}]" if t_type else t_text
             else:
-                h_str = f"({h_idx}, {h_text})"
-                t_str = f"({t_idx}, {t_text})"
+                h_str = h_text
+                t_str = t_text
 
             res.append((h_str, rel['type'], t_str))
     return res

@@ -15,7 +15,7 @@ VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 class S2GTokens:
     token_strs = {
         'e_type':   '<e_type>', 
-        'r_type':   '<r_type>', 
+        'r_type':   '<r_type>',
         'nr_type':  '<nr_type>',
         'tail':     '<tail>',
         'null':     '<null>'
@@ -24,8 +24,8 @@ class S2GTokens:
     base_tok_map = {
         're':             {'e_type', 'r_type', 'nr_type', 'tail'},
         'boundary_re':    {'r_type', 'nr_type', 'tail'},
-        'boundary_joint': {'r_type', 'nr_type', 'tail', 'null'},
-        'joint':          {'e_type', 'r_type', 'nr_type', 'tail', 'null'},
+        'boundary_joint': {'r_type', 'nr_type', 'tail'},
+        'joint':          {'e_type', 'r_type', 'nr_type', 'tail'},
     }
 
     def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:

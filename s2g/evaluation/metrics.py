@@ -14,50 +14,50 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from s2g.linearisation import VALID_VARIANTS
 
-Triplet = Tuple[int, str, int]              # (head_idx, rel_type, tail_idx)
-Quintuple = Tuple[int, str, str, int, str]  # (head_idx, head_type, rel_type, tail_idx, tail_type)
-EntityMention = Tuple[int, str]             # (head_idx, entity_type)
+Triplet = Tuple[str, str, str]              # (head_text, rel_type, tail_text)
+Quintuple = Tuple[str, str, str, str, str]  # (head_text, head_type, rel_type, tail_text, tail_type)
+EntityMention = Tuple[str, str]             # (head_text, entity_type)
 EntityBlock = Dict[str, Any]
 
 
-def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Tuple], List[Tuple], List[Tuple], List[Tuple]]:
+def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[str], List[EntityMention]]:
     """
     Single-pass extraction of text-validated evaluation elements from a sentence's EntityBlocks.
-    Binds entity text to the unique block index h_idx: (text, h_idx).
     """
-    triplets: List[Tuple] = []
-    quintuples: List[Tuple] = []
-    entities: List[Tuple] = []
-    mentions: List[Tuple] = []
+    triplets: List[Triplet] = []
+    quintuples: List[Quintuple] = []
+    entities: List[str] = []
+    mentions: List[EntityMention] = []
 
-    for h_idx, ent in enumerate(blocks):
+    ent_map: Dict[str, EntityBlock] = {
+        b['text'].strip(): b for b in blocks if b.get('text')
+    }
+
+    for ent in blocks:
         h_text = ent.get('text', '').strip()
         h_type = ent.get('type', '')
 
         if not h_text:
             continue
 
-        # Entity boundary match: (head_text, h_idx)
-        entities.append((h_idx, h_text))
+        # Entity boundary match: head_text
+        entities.append(h_text)
         if h_type:
-            # Entity strict match: (head_text, head_type, h_idx)
-            mentions.append((h_idx, h_text, h_type))
+            # Entity strict match: (head_text, head_type)
+            mentions.append((h_text, h_type))
 
         for rel in ent.get('relations', []):
-            r_type = rel.get('type', '')
-            t_idx = rel.get('tail_id')
+            r_type = rel.get('type', '').strip()
+            t_text = rel.get('tail_text', '').strip()
+            t_ent = ent_map.get(t_text, {})
+            t_type = rel.get('tail_type') or t_ent.get('type', '')
 
-            if t_idx is not None and t_idx < len(blocks):
-                t_ent = blocks[t_idx]
-                t_text = t_ent.get('text', '').strip()
-                t_type = t_ent.get('type', '')
-
-                if t_text and r_type:
-                    # Triplet (Relation boundary): (head_text, rel_type, tail_text, (h_idx, t_idx))
-                    triplets.append((h_idx, h_text, r_type, t_idx, t_text))
-                    if h_type and t_type:
-                        # Quintuple (Relation strict): (head_text, head_type, rel_type, tail_text, tail_type, (h_idx, t_idx))
-                        quintuples.append((h_idx, h_text, h_type, r_type, t_idx, t_text, t_type))
+            if t_text and r_type:
+                # Triplet (Relation boundary): (head_text, rel_type, tail_text)
+                triplets.append((h_text, r_type, t_text))
+                if h_type and t_type:
+                    # Quintuple (Relation strict): (head_text, head_type, rel_type, tail_text, tail_type)
+                    quintuples.append((h_text, h_type, r_type, t_text, t_type))
 
     return triplets, quintuples, entities, mentions
 
@@ -156,11 +156,11 @@ def compute_metrics_for_variant(
     ent_set = set(ent_schema) if ent_schema else None
 
     if rel_set is not None:
-        all_pred_triplets = [[t for t in sent if t[2] in rel_set] for sent in all_pred_triplets]
-        all_pred_quintuples = [[q for q in sent if q[3] in rel_set] for sent in all_pred_quintuples]
+        all_pred_triplets = [[t for t in sent if t[1] in rel_set] for sent in all_pred_triplets]
+        all_pred_quintuples = [[q for q in sent if q[2] in rel_set] for sent in all_pred_quintuples]
 
     if ent_set is not None:
-        all_pred_entity_mentions = [[m for m in sent if m[2] in ent_set] for sent in all_pred_entity_mentions]
+        all_pred_entity_mentions = [[m for m in sent if m[1] in ent_set] for sent in all_pred_entity_mentions]
 
     # Compute metrics
     m: Dict[str, float] = {}
@@ -175,7 +175,7 @@ def compute_metrics_for_variant(
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[2], ent_schema, "ner"))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, "ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
@@ -183,7 +183,7 @@ def compute_metrics_for_variant(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
-        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[2], rel_schema, "boundary"))
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
@@ -191,6 +191,6 @@ def compute_metrics_for_variant(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
-        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[3], rel_schema, "strict"))
+        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
 
     return m
