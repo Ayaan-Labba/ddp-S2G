@@ -44,7 +44,7 @@ class S2GTrainer(Seq2SeqTrainer):
     def create_scheduler(self,
         num_training_steps: int,
         optimizer: Optional[torch.optim.Optimizer] = None,
-    ) -> None:
+    ):
         """
         Custom Inverse Square Root Scheduler
         """
@@ -68,20 +68,27 @@ class S2GTrainer(Seq2SeqTrainer):
     def get_eval_dataloader(self, eval_dataset: Optional[Any] = None) -> DataLoader:
         """
         Override evaluation dataloader to use budget-mode collation.
+
+        Swaps the collator and defers to ``Trainer`` so that distributed sharding,
+        pinned memory and prefetching are preserved.
+
+        ``Trainer`` caches every non-string eval dataset under the single key
+        ``"eval"`` when ``dataloader_persistent_workers`` is set, so alternating
+        between the validation set and the train subset would otherwise silently
+        reuse whichever loader was built first. Drop the cache whenever the
+        requested dataset changes.
         """
         dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-        if dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        if getattr(self, '_s2g_eval_dataloader_key', None) is not dataset:
+            getattr(self, '_eval_dataloaders', {}).pop('eval', None)
+            self._s2g_eval_dataloader_key = dataset
 
-        collator = self.data_collator.to_eval_mode()
-
-        return DataLoader(
-            dataset=dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            collate_fn=collator,
-            num_workers=self.args.dataloader_num_workers,
-            shuffle=False,
-        )
+        train_collator = self.data_collator
+        self.data_collator = train_collator.to_eval_mode()
+        try:
+            return super().get_eval_dataloader(eval_dataset)
+        finally:
+            self.data_collator = train_collator
 
     def evaluate(self, eval_dataset: Any = None, **gen_kwargs: Any) -> Dict[str, float]:
         """
@@ -93,10 +100,11 @@ class S2GTrainer(Seq2SeqTrainer):
             for cb in early_stopping_callbacks:
                 self.callback_handler.callbacks.remove(cb)
 
+            train_metrics: Dict[str, float] = {}
             try:
                 train_metrics = super().evaluate(
                     eval_dataset=self.eval_train_dataset,
-                    metric_key_prefix='train',
+                    metric_key_prefix='eval_train',
                     **gen_kwargs,
                 )
 
@@ -104,7 +112,7 @@ class S2GTrainer(Seq2SeqTrainer):
                 for cb in early_stopping_callbacks:
                     self.callback_handler.callbacks.append(cb)
 
-                all_metrics.update(train_metrics)
+            all_metrics.update(train_metrics)
 
         return all_metrics
 

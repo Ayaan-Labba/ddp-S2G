@@ -3,12 +3,18 @@ Linearised graph construction and parsing for Sentinel Branch (with static <tail
 """
 from __future__ import annotations
 
+import logging
 import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
-from collections import defaultdict
 
 from .special_tokens import S2GTokens, VALID_VARIANTS
+
+logger = logging.getLogger(__name__)
+
+# T5 / Flan-T5 ship exactly <extra_id_0> .. <extra_id_99>; anything beyond that
+# is not in the vocabulary and would be emitted as literal text.
+MAX_SENTINELS = 100
 
 EntityBlock = Dict[str, Any]
 Triplet = Tuple[str, str, str]
@@ -124,13 +130,17 @@ def build_graph(
     if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
 
-    if not ent_blocks:
-        return ""
+    parts = []
 
-    if random_graph: 
+    if random_graph and ent_blocks:
         ent_blocks = random.sample(ent_blocks, len(ent_blocks))
 
-    parts = []
+    if len(ent_blocks) > MAX_SENTINELS:
+        logger.warning(
+            "Truncating %d entity blocks to %d: no sentinel token exists beyond <extra_id_%d>.",
+            len(ent_blocks), MAX_SENTINELS, MAX_SENTINELS - 1
+        )
+        ent_blocks = ent_blocks[:MAX_SENTINELS]
 
     if variant in {'joint', 'boundary_joint'}:
         for ent_idx, ent in enumerate(ent_blocks):
@@ -147,18 +157,18 @@ def build_graph(
                     rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
                     tail_token = tokens.token_strs['tail']
                     ent_toks.extend([rel_token, rel['type'], tail_token, rel['tail_text']])
-            else:
-                ent_toks.extend([tokens.token_strs['r_type'], 'none'])
 
             parts.append(" ".join(ent_toks))
 
     elif variant in {'re', 'boundary_re'}:
-        for ent_idx, ent in enumerate(ent_blocks):
+        sent_idx = 0
+        for ent in ent_blocks:
             rels = ent.get('relations', [])
             if not rels:
                 continue
 
-            sentinel = tokens.sentinel_token(ent_idx)
+            sentinel = tokens.sentinel_token(sent_idx)
+            sent_idx += 1
             ent_toks = [sentinel, ent['text']]
             if variant == 're' and ent.get('type'):
                 ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
@@ -170,7 +180,7 @@ def build_graph(
                 rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
                 tail_token = tokens.token_strs['tail']
                 tail_text = rel['tail_text']
-                tail_type = rel.get('tail_type', '')
+                tail_type = rel.get('tail_type') or ''
 
                 if variant == 're':
                     ent_toks.extend([
@@ -213,7 +223,7 @@ def deduplicate_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
     return deduped
 
 
-def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[List[EntityBlock], List[RejectedItem]]:
+def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
     State-machine parser for nested linearised target graphs.
     """
@@ -260,6 +270,10 @@ def parse_graph(text: str, tok: S2GTokens, use_nesting: bool = True) -> Tuple[Li
             sent_idx = int(idx_str) if idx_str.isdigit() else len(entities)
 
             flush_rel()
+            if sent_idx < len(entities) and entities[sent_idx]['text']:
+                # Index reused by a malformed prediction: start a fresh block rather
+                # than overwriting the text while keeping the previous relations.
+                sent_idx = len(entities)
             current_head_idx = sent_idx
             ent = get_or_create_entity(sent_idx)
             ent['text'] = ''

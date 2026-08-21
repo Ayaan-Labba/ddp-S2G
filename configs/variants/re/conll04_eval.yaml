@@ -15,6 +15,10 @@ tokenizer:
 prompt:
   type: natural
 
+graph:
+  use_rejection: true   # must match the training run (variants/re/conll04.yaml)
+  use_nesting: true
+
 generation:
   num_beams: 3
   constraint_decoding: False        # Set true for FSM-constrained evaluation

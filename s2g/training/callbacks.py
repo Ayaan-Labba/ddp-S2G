@@ -229,9 +229,9 @@ class S2GEarlyStoppingCallback(EarlyStoppingCallback):
 
 def load_run_metadata(output_dir: str) -> Optional[Dict[str, Any]]:
     m_path = Path(output_dir) / "run_metadata.json"
-    if m_path.exists():
-        with open(m_path, 'r', encoding='utf-8') as f: return json.load(f)
-    else:
-        raise FileNotFoundError(f"Metaadata file not found: {m_path}")
+    if not m_path.exists():
+        logger.warning("No run metadata at %s; starting a fresh W&B run.", m_path)
+        return None
 
-    return
+    with open(m_path, 'r', encoding='utf-8') as f:
+        return json.load(f)

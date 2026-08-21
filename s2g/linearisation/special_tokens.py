@@ -28,7 +28,7 @@ class S2GTokens:
         'joint':          {'e_type', 'r_type', 'nr_type', 'tail'},
     }
 
-    def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:
+    def __init__(self, variant: str, use_rejection: bool = False) -> None:
         self.variant = variant
         self.active_tokens = self.base_tok_map.get(variant, self.base_tok_map['joint']).copy()
         if use_rejection: 

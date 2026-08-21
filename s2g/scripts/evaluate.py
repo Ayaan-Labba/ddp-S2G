@@ -3,6 +3,7 @@ Standalone evaluation script for S2G using streaming DataLoader and S2GEvaluator
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -33,17 +34,35 @@ def main() -> None:
         raise ValueError("model.pretrained_checkpoint is required for evaluation.")
 
     ckpt_path = Path(ckpt)
+
+    # Settings that determine how targets are linearised must match the training
+    # run exactly, otherwise the gold graphs are rebuilt in a different format and
+    # the reported scores are meaningless. Prefer the sidecar written by train.py.
+    fmt_file = ckpt_path / "s2g_format.json"
+    fmt = {}
+    if fmt_file.exists():
+        with open(fmt_file, 'r', encoding='utf-8') as f:
+            fmt = json.load(f)
+        logger.info("Loaded linearisation format from %s: %s", fmt_file, fmt)
+    else:
+        logger.warning(
+            "%s not found; falling back to the evaluation config. Verify that "
+            "graph.use_rejection / graph.use_nesting / prompt.type match training.",
+            fmt_file,
+        )
+
     variant_file = ckpt_path / "variant.txt"
-    variant = (
+    variant = fmt.get('variant') or (
         variant_file.read_text(encoding='utf-8').strip() if variant_file.exists() else cfg.model.variant
     )
 
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
     model = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
 
-    use_rejection = getattr(cfg.graph, 'use_rejection', True)
-    prompt_type = getattr(cfg.prompt, 'type', 'natural')
-    tokens = S2GTokens(variant=variant, use_rejection=use_rejection, prompt=prompt_type)
+    use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
+    use_nesting = fmt.get('use_nesting', cfg.graph.use_nesting)
+    prompt_type = fmt.get('prompt_type', cfg.prompt.type)
+    tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -67,14 +86,14 @@ def main() -> None:
             'variant': variant,
             'max_source_length': cfg.tokenizer.max_source_length,
             'max_target_length': cfg.tokenizer.max_target_length,
-            'max_ent_types': len(ent_schema),
-            'max_rel_types': len(rel_schema),
-            'mode': getattr(cfg.prompt, 'mode', 'budget'),
+            'max_ent_types': fmt.get('max_ent_types', cfg.prompt.max_ent_types) or len(ent_schema),
+            'max_rel_types': fmt.get('max_rel_types', cfg.prompt.max_rel_types) or len(rel_schema),
+            'mode': cfg.prompt.mode,
             'prompt_type': prompt_type,
-            'random_prompt': getattr(cfg.prompt, 'random_prompt', False),
-            'random_graph': getattr(cfg.graph, 'random_graph', False),
+            'random_prompt': cfg.prompt.random_prompt,
+            'random_graph': cfg.graph.random_graph,
             'use_rejection': use_rejection,
-            'use_nesting': getattr(cfg.graph, 'use_nesting', True),
+            'use_nesting': use_nesting,
             'seed': cfg.train.seed,
         }
     )

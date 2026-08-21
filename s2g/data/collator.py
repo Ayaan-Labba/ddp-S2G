@@ -6,6 +6,7 @@ from __future__ import annotations
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
+import torch
 from transformers import PreTrainedTokenizerBase
 
 from s2g.linearisation import (
@@ -16,7 +17,6 @@ from s2g.linearisation import (
     build_re_encoder_input, 
     build_boundary_re_encoder_input, 
     organise_filter_and_block, 
-    get_tok,
     VALID_VARIANTS
 )
 
@@ -45,22 +45,22 @@ class S2GCollator:
         self.use_rejection = config.get('use_rejection', True)
         self.use_nesting = config.get('use_nesting', True)
         self.prompt_type = config.get('prompt_type', 'natural')
-        self.tok: S2GTokens = S2GTokens(self.variant, use_rejection=self.use_rejection, prompt=self.prompt_type)
+        self.tok: S2GTokens = S2GTokens(self.variant, use_rejection=self.use_rejection)
         self.rng = random.Random(config.get('seed', 0))
 
-        # Pre-populate TOK_CACHE in prompt.py to prevent lookup errors when prompt == 'ssi'
-        get_tok(self.variant, prompt=self.prompt_type)
-        
-        self.step = 0
+        # Shared-memory counter: ``collate_fn`` runs inside DataLoader worker
+        # processes, which hold pickled copies of this object. A plain attribute
+        # written by the trainer would never reach them, freezing the bernoulli
+        # curriculum at step 0 for the whole run.
+        self._step = torch.zeros(1, dtype=torch.long).share_memory_()
 
     @property
     def current_step(self) -> int:
-        return self.step
-        
+        return int(self._step.item())
+
     @current_step.setter
     def current_step(self, value: int) -> None:
-        self.step = value
-        self.cached_schedule = self.schedule_values()
+        self._step.fill_(int(value))
 
     def __call__(self, batch: List[Dict]) -> Dict[str, Any]:
         prepare_func = getattr(self, f"prepare_{self.variant}")
@@ -169,7 +169,7 @@ class S2GCollator:
 
             return list(instance_types), sampled_neg
 
-        pos_rate, neg_rate, pos_k, neg_k = getattr(self, 'cached_schedule', self.schedule_values())
+        pos_rate, neg_rate, pos_k, neg_k = self.schedule_values()
         included_pos = [t for t in instance_types]
         if len(included_pos) > pos_k:
             included_pos = self.rng.sample(included_pos, pos_k)
@@ -191,7 +191,7 @@ class S2GCollator:
 
     def schedule_values(self) -> Tuple[float, float, int, int]:
         T = max(int(self.cfg.get('max_steps', 1)), 1)
-        frac = min(self.step, T) / T
+        frac = min(self.current_step, T) / T
         
         def lerp(start: float, end: float) -> float:
             return start + frac * (end - start)

@@ -37,8 +37,8 @@ class PromptConfig:
     mode: str = 'budget'
     type: str = 'natural'
     random_prompt: bool = False
-    max_ent_types: Optional[int] = 10
-    max_rel_types: Optional[int] = 10
+    max_ent_types: Optional[int] = None   # null = use the full entity schema
+    max_rel_types: Optional[int] = None   # null = use the full relation schema
     pos_rate: Optional[float] = 0.5
     neg_rate: Optional[float] = 0.5
     pos_rate_start: Optional[float] = 0.9
@@ -53,7 +53,7 @@ class PromptConfig:
 @dataclass
 class GraphConfig:
     random_graph: bool = False
-    use_rejection: bool = True
+    use_rejection: bool = False
     use_nesting: bool = True
 
 @dataclass

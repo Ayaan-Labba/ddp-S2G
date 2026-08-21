@@ -3,6 +3,7 @@ Training script for the S2G model with integrated streaming evaluation.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -102,7 +103,7 @@ def main() -> None:
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
 
     # Configure tokenizer and model with special tokens
-    tokens = S2GTokens(variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection, prompt=cfg.prompt.type)
+    tokens = S2GTokens(variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection)
     warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
     add_special_tokens_to_tokenizer(tokenizer=tokenizer, tokens=tokens, model=model, warm_start=warm_start)
 
@@ -226,7 +227,24 @@ def main() -> None:
         tokenizer.save_pretrained(str(best_dir))
         (best_dir / "variant.txt").write_text(cfg.model.variant, encoding="utf-8")
 
+        # Persist every setting that changes how targets are linearised, so that
+        # standalone evaluation cannot silently score against a different format.
+        (best_dir / "s2g_format.json").write_text(
+            json.dumps({
+                'variant':        cfg.model.variant,
+                'prompt_type':    cfg.prompt.type,
+                'use_rejection':  cfg.graph.use_rejection,
+                'use_nesting':    cfg.graph.use_nesting,
+                'max_ent_types':  cfg.prompt.max_ent_types,
+                'max_rel_types':  cfg.prompt.max_rel_types,
+            }, indent=2),
+            encoding="utf-8",
+        )
+
         model.eval()
+        # Training with gradient checkpointing leaves use_cache disabled, which
+        # makes post-training generation needlessly slow.
+        model.config.use_cache = True
         device = next(model.parameters()).device
 
         eval_collator = collator.to_eval_mode()
