@@ -14,7 +14,7 @@ VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
 class S2GTokens:
     token_strs = {
-        'e_type':   '<e_type>', 
+        'e_type':   '<e_type>',
         'r_type':   '<r_type>',
         'nr_type':  '<nr_type>',
         'tail':     '<tail>',
@@ -31,7 +31,7 @@ class S2GTokens:
     def __init__(self, variant: str, use_rejection: bool = False) -> None:
         self.variant = variant
         self.active_tokens = self.base_tok_map.get(variant, self.base_tok_map['joint']).copy()
-        if use_rejection: 
+        if use_rejection:
             self.active_tokens.add('null')
 
         self._all_tokens = [self.token_strs[tok] for tok in ALL_TOKEN_NAMES if tok in self.active_tokens]
@@ -46,15 +46,16 @@ class S2GTokens:
 
 
 def add_special_tokens_to_tokenizer(
-        tokenizer: AutoTokenizer, 
-        tokens: S2GTokens, 
-        model: Optional[AutoModel] = None, 
+        tokenizer: AutoTokenizer,
+        tokens: S2GTokens,
+        model: Optional[AutoModel] = None,
         warm_start: bool = True,
     ) -> int:
+    # Add special tokens to tokenizer and optionally warm start model embeddings
     num_added = tokenizer.add_special_tokens({'additional_special_tokens': tokens.all_tokens})
     if model is not None:
         if num_added > 0:
-            model.config.tie_word_embeddings = False
+            model.config.tie_word_embeddings = False # weights are untied for flan-t5 models
             model.resize_token_embeddings(len(tokenizer))
 
         if warm_start:
@@ -78,8 +79,9 @@ def add_special_tokens_to_tokenizer(
                     special_tok = tokens.token_strs[tok_name]
                     new_id = tokenizer.convert_tokens_to_ids(special_tok)
                     init_ids = tokenizer.encode(init_text, add_special_tokens=False)
-                    
+
                     if init_ids and new_id != tokenizer.unk_token_id:
+                        # Warm start input embeddings by taking the mean of the initialization phrase
                         mean_in_emb = in_emb[init_ids].mean(dim=0)
                         in_emb[new_id].copy_(mean_in_emb)
                         if out_emb is not None:
@@ -99,11 +101,11 @@ def get_token_ids(tokenizer, tokens: S2GTokens) -> Dict[str, int]:
         if name in tokens.active_tokens:
             token_str = tokens.token_strs[name]
             token_id = tokenizer.convert_tokens_to_ids(token_str)
-            
+
             if token_id is not None and token_id != unk_id:
                 res[name] = token_id
                 continue
 
         res[name] = -(idx + 200)
-        
+
     return res

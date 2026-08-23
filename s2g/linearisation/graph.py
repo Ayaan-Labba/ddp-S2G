@@ -53,7 +53,7 @@ def organise_filter_and_block(
         head_offsets = {tuple(r['head']['offset']) for r in filtered_rels}
         block_ents = [e for e in filtered_ents if tuple(e['offset']) in head_offsets]
 
-    # 4. Build blocks. With ``dedup`` every mention keeps its own block; otherwise
+    # 4. Build blocks. Without ``dedup`` every mention keeps its own block; otherwise
     # mentions collapse on (text, type), so genuine homographs stay separate.
     offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
     blocks: List[EntityBlock] = []
@@ -101,13 +101,13 @@ def organise_filter_and_block(
 
 
 def build_graph(
-        ent_blocks: List[EntityBlock], 
-        variant: str, 
-        tokens: S2GTokens, 
+        ent_blocks: List[EntityBlock],
+        variant: str,
+        tokens: S2GTokens,
         use_nesting: bool = True,
         random_graph: bool = False,
         use_rejection: bool = False,
-        rejected_ent_types: List[str] = None, 
+        rejected_ent_types: List[str] = None,
         rejected_rel_types: List[str] = None
     ) -> str:
     if variant not in VALID_VARIANTS:
@@ -118,15 +118,24 @@ def build_graph(
     if random_graph and ent_blocks:
         ent_blocks = random.sample(ent_blocks, len(ent_blocks))
 
-    if len(ent_blocks) > MAX_SENTINELS:
+    # Only emitted blocks consume a sentinel: the joint variants emit every
+    # entity, the RE variants only those heading at least one relation. Capping
+    # the candidate list instead would under-fill the RE targets, dropping heads
+    # that would have fitted once the relation-less entities were skipped.
+    emit_blocks = (
+        ent_blocks if variant in {'joint', 'boundary_joint'}
+        else [e for e in ent_blocks if e.get('relations')]
+    )
+
+    if len(emit_blocks) > MAX_SENTINELS:
         logger.warning(
             "Truncating %d entity blocks to %d: no sentinel token exists beyond <extra_id_%d>.",
-            len(ent_blocks), MAX_SENTINELS, MAX_SENTINELS - 1
+            len(emit_blocks), MAX_SENTINELS, MAX_SENTINELS - 1
         )
-        ent_blocks = ent_blocks[:MAX_SENTINELS]
+        emit_blocks = emit_blocks[:MAX_SENTINELS]
 
     if variant in {'joint', 'boundary_joint'}:
-        for ent_idx, ent in enumerate(ent_blocks):
+        for ent_idx, ent in enumerate(emit_blocks):
             sentinel = tokens.sentinel_token(ent_idx)
             ent_toks = [sentinel, ent['text']]
             if variant == 'joint' and ent.get('type'):
@@ -144,14 +153,10 @@ def build_graph(
             parts.append(" ".join(ent_toks))
 
     elif variant in {'re', 'boundary_re'}:
-        sent_idx = 0
-        for ent in ent_blocks:
-            rels = ent.get('relations', [])
-            if not rels:
-                continue
+        for ent_idx, ent in enumerate(emit_blocks):
+            rels = ent['relations']
 
-            sentinel = tokens.sentinel_token(sent_idx)
-            sent_idx += 1
+            sentinel = tokens.sentinel_token(ent_idx)
             ent_toks = [sentinel, ent['text']]
             if variant == 're' and ent.get('type'):
                 ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
@@ -167,8 +172,8 @@ def build_graph(
 
                 if variant == 're':
                     ent_toks.extend([
-                        rel_token, rel['type'], 
-                        tail_token, tail_text, 
+                        rel_token, rel['type'],
+                        tail_token, tail_text,
                         tokens.token_strs['e_type'], tail_type
                     ])
                 else:
@@ -178,8 +183,8 @@ def build_graph(
 
     if use_rejection:
         append_null_block(
-            parts, 
-            tokens, 
+            parts,
+            tokens,
             ent_types=(rejected_ent_types or []) if variant in {'joint', 're'} else [],
             rel_types=rejected_rel_types or [],
             random_graph=random_graph
@@ -357,10 +362,10 @@ def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -
 
 
 def append_null_block(
-        parts: List[str], 
-        tok: S2GTokens, 
-        ent_types: List[str], 
-        rel_types: List[str], 
+        parts: List[str],
+        tok: S2GTokens,
+        ent_types: List[str],
+        rel_types: List[str],
         random_graph: bool
     ) -> None:
     e_types = random.sample(ent_types, len(ent_types)) if random_graph else sorted(ent_types)
