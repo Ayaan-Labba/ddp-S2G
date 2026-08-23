@@ -143,16 +143,6 @@ Outputs `{split}_metrics.json` and `{split}_results.jsonl` (one record per insta
 
 ---
 
-## Tests
-
-```bash
-python -m unittest discover -s tests -t .
-```
-
-48 tests over the linearisation round trip, offset projection, gold construction and scoring, across all four variants and both `dedup` settings. Stdlib `unittest` only — no extra dependencies; pytest can collect them too if you add it.
-
----
-
 ## Deduplication (`graph.dedup`)
 
 Benchmarks annotate entities by offset, but the decoder emits text, so repeated mentions need a policy. `graph.dedup` sets it for **target construction only** — parsing never deduplicates.

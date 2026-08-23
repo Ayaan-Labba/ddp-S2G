@@ -227,7 +227,7 @@ Reconciles relation tails against the entity blocks, in place. Shared by `parse_
 
 > **Known limitation (strict scoring ceiling).** First-occurrence matching cannot be *correct* for a homograph tail in the joint variants: if `Washington [person]` precedes `Washington [location]`, a relation pointing at the latter resolves to the former. This is inherent to the joint format, where tail types are never emitted inline and surface text is the only handle.
 >
-> Since gold is now read from the annotation rather than round-tripped through the target format (§4.3), gold carries the *true* tail type while the prediction carries the first-occurrence one. The model is therefore genuinely penalised on these triples, and a flawless generation cannot reach `strict_f1 = 1.0` on a sentence containing a homograph tail. This is honest measurement, not a bug — but it is a ceiling worth knowing about when reading strict numbers. `tests/test_metrics.py::TestHomographLimits` pins the behaviour.
+> Since gold is now read from the annotation rather than round-tripped through the target format (§4.3), gold carries the *true* tail type while the prediction carries the first-occurrence one. The model is therefore genuinely penalised on these triples, and a flawless generation cannot reach `strict_f1 = 1.0` on a sentence containing a homograph tail. This is honest measurement, not a bug — but it is a ceiling worth knowing about when reading strict numbers.
 >
 > Affected volume is small: 0 cases in CoNLL04 and NYT, 3 in SciERC train, and 28 / 1 / 4 in `scierc_doc` train / val / test. Emitting inline tail types for `joint` would be the only real fix.
 
@@ -452,7 +452,7 @@ Conversely, offset scoring is naturally set-like on spans: emitting the same men
 
 > **Known limitation (offset precision ceiling).** Projection is blind to *which* occurrence the model meant. A mention emitted once projects onto **every** occurrence of its text, so when a surface form is ambiguous the extra projections are wrong by construction: recall is unaffected, precision pays. On the `Washington` homograph sentence a flawless generation scores `offset_boundary_recall = 1.0` but `offset_boundary_precision = 0.5`, and both `Washington` spans inherit both predicted types, so `offset_ner_f1 < 1.0` even though `offset_ner_boundary_f1 = 1.0`.
 >
-> This follows directly from the "each matched offset is a unique prediction" rule and applies to *unambiguous* repeated mentions too — there it is exactly the desired behaviour, since every occurrence really is gold. Only genuinely ambiguous forms pay. `tests/test_metrics.py::TestHomographLimits` pins the behaviour.
+> This follows directly from the "each matched offset is a unique prediction" rule and applies to *unambiguous* repeated mentions too — there it is exactly the desired behaviour, since every occurrence really is gold. Only genuinely ambiguous forms pay.
 
 ---
 
