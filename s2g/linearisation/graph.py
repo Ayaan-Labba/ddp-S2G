@@ -22,12 +22,13 @@ RejectedItem = str
 
 
 def organise_filter_and_block(
-        entities: List, 
-        relations: List, 
-        allowed_ent_types: Set[str], 
+        entities: List,
+        relations: List,
+        allowed_ent_types: Set[str],
         allowed_rel_types: Set[str],
         variant: str = 'joint',
-        use_types: bool = True
+        use_types: bool = True,
+        dedup: bool = True
     ) -> List[EntityBlock]:
 
     # 1. Filter entities and relations
@@ -39,82 +40,64 @@ def organise_filter_and_block(
         and tuple(r['head']['offset']) in valid_offsets
         and tuple(r['tail']['offset']) in valid_offsets
     ]
-    
+
     # 2. Sort filtered data by offset
     filtered_ents.sort(key=lambda e: e['offset'])
     filtered_rels.sort(key=lambda r: (r['head']['offset'], r['tail']['offset']))
-    
+
+    # 3. Select the entities that are entitled to a block: the joint variants emit
+    # every entity, the RE variants only those heading at least one relation.
     if variant in {'joint', 'boundary_joint'}:
-        # Deduplicate entities by text (preserving first occurrence offset order)
-        offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
-        deduped_ents: List[EntityBlock] = []
-        text_to_ent: Dict[str, EntityBlock] = {}
-
-        for ent in filtered_ents:
-            ent_text = ent['text']
-            if ent_text not in text_to_ent:
-                block: EntityBlock = {
-                    'text': ent_text,
-                    'type': ent.get('type') if use_types else None,
-                    'offset': ent['offset'],
-                    'relations': []
-                }
-                text_to_ent[ent_text] = block
-                deduped_ents.append(block)
-            offset_to_ent[tuple(ent['offset'])] = text_to_ent[ent_text]
-
-        # Group relations by deduplicated head entity
-        seen_rels = set()
-        for rel in filtered_rels:
-            head_block = offset_to_ent[tuple(rel['head']['offset'])]
-            tail_text = rel['tail']['text']
-            tail_type = rel['tail'].get('type') if use_types else None
-            rel_type = rel['type']
-            rel_key = (head_block['text'], rel_type, tail_text)
-            if rel_key not in seen_rels:
-                seen_rels.add(rel_key)
-                head_block['relations'].append({
-                    'type': rel_type,
-                    'tail_text': tail_text,
-                    'tail_type': tail_type
-                })
-
-        return deduped_ents
-
+        block_ents = filtered_ents
     else:
-        # RE variants (re, boundary_re): only retain head entities, no text deduplication
         head_offsets = {tuple(r['head']['offset']) for r in filtered_rels}
-        offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
-        head_blocks: List[EntityBlock] = []
+        block_ents = [e for e in filtered_ents if tuple(e['offset']) in head_offsets]
 
-        for ent in filtered_ents:
-            offset_key = tuple(ent['offset'])
-            if offset_key in head_offsets:
-                block: EntityBlock = {
-                    'text': ent['text'],
-                    'type': ent.get('type') if use_types else None,
-                    'offset': ent['offset'],
-                    'relations': []
-                }
-                offset_to_ent[offset_key] = block
-                head_blocks.append(block)
+    # 4. Build blocks. With ``dedup`` every mention keeps its own block; otherwise
+    # mentions collapse on (text, type), so genuine homographs stay separate.
+    offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
+    blocks: List[EntityBlock] = []
+    key_to_ent: Dict[Tuple[str, Optional[str]], EntityBlock] = {}
 
-        seen_rels = set()
-        for rel in filtered_rels:
-            head_block = offset_to_ent[tuple(rel['head']['offset'])]
-            tail_text = rel['tail']['text']
-            tail_type = rel['tail'].get('type') if use_types else None
-            rel_type = rel['type']
-            rel_key = (id(head_block), rel_type, tail_text, tail_type)
-            if rel_key not in seen_rels:
-                seen_rels.add(rel_key)
-                head_block['relations'].append({
-                    'type': rel_type,
-                    'tail_text': tail_text,
-                    'tail_type': tail_type
-                })
+    for ent in block_ents:
+        ent_type = ent.get('type') if use_types else None
+        block_key = (ent['text'], ent_type)
+        block = key_to_ent.get(block_key) if dedup else None
 
-        return head_blocks
+        if block is None:
+            block = {
+                'text': ent['text'],
+                'type': ent_type,
+                'offset': ent['offset'],
+                'relations': []
+            }
+            blocks.append(block)
+            if dedup:
+                key_to_ent[block_key] = block
+
+        offset_to_ent[tuple(ent['offset'])] = block
+
+    # 5. Attach relations to their head block.
+    seen_rels: Set[Tuple] = set()
+    for rel in filtered_rels:
+        head_block = offset_to_ent[tuple(rel['head']['offset'])]
+        tail_text = rel['tail']['text']
+        tail_type = rel['tail'].get('type') if use_types else None
+        rel_type = rel['type']
+
+        if dedup:
+            rel_key = (head_block['text'], head_block['type'], rel_type, tail_text, tail_type)
+            if rel_key in seen_rels:
+                continue
+            seen_rels.add(rel_key)
+
+        head_block['relations'].append({
+            'type': rel_type,
+            'tail_text': tail_text,
+            'tail_type': tail_type
+        })
+
+    return blocks
 
 
 def build_graph(
@@ -205,27 +188,12 @@ def build_graph(
     return " ".join(parts).strip()
 
 
-def deduplicate_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
-    seen: Dict[str, int] = {}
-    deduped: List[EntityBlock] = []
-    for ent in entities:
-        if not ent.get('text'):
-            continue
-        text_key = ent["text"].strip()
-        if text_key in seen:
-            target = deduped[seen[text_key]]
-            if not target.get('type') and ent.get('type'):
-                target['type'] = ent['type']
-            target["relations"].extend(ent.get("relations", []))
-        else:
-            seen[text_key] = len(deduped)
-            deduped.append(ent)
-    return deduped
-
-
 def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
     State-machine parser for nested linearised target graphs.
+
+    Parsing never deduplicates: every emitted block is retained, so repeated
+    mentions and repeated relations survive into scoring exactly as generated.
     """
     sentinel_pattern = re.compile(r'(<extra_id_\d+>|<e_type>|<r_type>|<nr_type>|<tail>|<null>)')
     raw_tokens = [t.strip() for t in sentinel_pattern.split(text) if t.strip()]
@@ -324,51 +292,44 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
 
     flush_rel()
 
-    valid_entities = [e for e in entities if e.get('text')]
+    return resolve_tail_entities([e for e in entities if e.get('text')]), rejected
 
-    if tok.variant in {'joint', 'boundary_joint'}:
-        deduped_entities = deduplicate_entities(valid_entities)
 
-        ent_by_text: Dict[str, EntityBlock] = {
-            ent['text'].strip(): ent 
-            for ent in deduped_entities 
-            if ent.get('text')
-        }
+def resolve_tail_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
+    """
+    Reconcile relation tails against the entity blocks, in place.
 
-        for ent in list(deduped_entities):
-            for rel in ent.get('relations', []):
-                t_text = rel.get('tail_text', '').strip()
-                if not t_text:
-                    continue
-                if t_text not in ent_by_text:
-                    new_ent: EntityBlock = {'text': t_text, 'type': rel.get('tail_type'), 'relations': []}
-                    deduped_entities.append(new_ent)
-                    ent_by_text[t_text] = new_ent
-                elif not ent_by_text[t_text].get('type') and rel.get('tail_type'):
-                    ent_by_text[t_text]['type'] = rel.get('tail_type')
+    A tail mention resolves to the *first* block carrying that text: the joint
+    variants never emit tail types inline, so the type has to be recovered from
+    the entity's own block, and duplicated mentions must resolve deterministically.
+    Tails with no block of their own are appended so they still count as entities.
 
-        return deduped_entities, rejected
+    Shared by ``parse_graph`` and gold-block construction so that both sides of a
+    comparison are reconciled identically.
+    """
+    ent_by_text: Dict[str, EntityBlock] = {}
+    for ent in entities:
+        ent_by_text.setdefault(ent['text'].strip(), ent)
 
-    else:
-        ent_by_text: Dict[str, EntityBlock] = {
-            ent['text'].strip(): ent 
-            for ent in valid_entities 
-            if ent.get('text')
-        }
+    for ent in list(entities):
+        for rel in ent.get('relations', []):
+            t_text = (rel.get('tail_text') or '').strip()
+            if not t_text:
+                continue
 
-        for ent in list(valid_entities):
-            for rel in ent.get('relations', []):
-                t_text = rel.get('tail_text', '').strip()
-                if not t_text:
-                    continue
-                if t_text not in ent_by_text:
-                    new_ent: EntityBlock = {'text': t_text, 'type': rel.get('tail_type'), 'relations': []}
-                    valid_entities.append(new_ent)
-                    ent_by_text[t_text] = new_ent
-                elif not ent_by_text[t_text].get('type') and rel.get('tail_type'):
-                    ent_by_text[t_text]['type'] = rel.get('tail_type')
+            match = ent_by_text.get(t_text)
+            if match is None:
+                # Tail that never appeared as a block of its own: keep it so it
+                # still counts towards entity recall.
+                new_ent: EntityBlock = {'text': t_text, 'type': rel.get('tail_type'), 'relations': []}
+                entities.append(new_ent)
+                ent_by_text[t_text] = new_ent
+            elif not rel.get('tail_type') and match.get('type'):
+                rel['tail_type'] = match['type']
+            elif not match.get('type') and rel.get('tail_type'):
+                match['type'] = rel.get('tail_type')
 
-        return valid_entities, rejected
+    return entities
 
 
 def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -> List[Tuple[str, str, str]]:

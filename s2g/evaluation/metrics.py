@@ -123,33 +123,30 @@ def per_type_macro(
 
 
 
-def compute_metrics_for_variant(
+def score_bundles(
     variant: str,
-    all_pred_blocks: List[List[EntityBlock]],
-    all_gold_blocks: List[List[EntityBlock]],
+    pred_bundles: List[Tuple],
+    gold_bundles: List[Tuple],
     rel_schema: Optional[List[str]] = None,
     ent_schema: Optional[List[str]] = None,
+    prefix: str = "",
 ) -> Dict[str, float]:
-    if variant not in VALID_VARIANTS:
-        raise ValueError(f"Unknown variant {variant!r}.")
+    """
+    Scores per-instance ``(triplets, quintuples, entities, mentions)`` bundles.
 
-    # Single-pass extraction across all sentences
-    all_pred_triplets, all_pred_quintuples, all_pred_entities, all_pred_entity_mentions = [], [], [], []
-    all_gold_triplets, all_gold_quintuples, all_gold_entities, all_gold_entity_mentions = [], [], [], []
+    Text tuples and offset tuples share the same positional layout — the type sits
+    at index 1 of a mention/triplet and index 2 of a quintuple — so the same
+    scoring path serves both; only ``prefix`` differs ('' vs 'offset_').
+    """
+    all_pred_triplets = [b[0] for b in pred_bundles]
+    all_pred_quintuples = [b[1] for b in pred_bundles]
+    all_pred_entities = [b[2] for b in pred_bundles]
+    all_pred_entity_mentions = [b[3] for b in pred_bundles]
 
-    for p_block in all_pred_blocks:
-        t, q, e, m = extract_from_blocks(p_block)
-        all_pred_triplets.append(t)
-        all_pred_quintuples.append(q)
-        all_pred_entities.append(e)
-        all_pred_entity_mentions.append(m)
-
-    for g_block in all_gold_blocks:
-        t, q, e, m = extract_from_blocks(g_block)
-        all_gold_triplets.append(t)
-        all_gold_quintuples.append(q)
-        all_gold_entities.append(e)
-        all_gold_entity_mentions.append(m)
+    all_gold_triplets = [b[0] for b in gold_bundles]
+    all_gold_quintuples = [b[1] for b in gold_bundles]
+    all_gold_entities = [b[2] for b in gold_bundles]
+    all_gold_entity_mentions = [b[3] for b in gold_bundles]
 
     # Filter out-of-schema predictions
     rel_set = set(rel_schema) if rel_schema else None
@@ -167,30 +164,60 @@ def compute_metrics_for_variant(
 
     # Entity boundary
     if variant in {'boundary_joint', 'boundary_re', 're', 'joint'}:
-        m.update(corpus_prf(all_pred_entities, all_gold_entities, 'ner_boundary'))
+        m.update(corpus_prf(all_pred_entities, all_gold_entities, f'{prefix}ner_boundary'))
 
     # Entity strict
     if variant in {'joint', 're'}:
         if ent_schema is None:
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, "ner"))
+        m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, f'{prefix}ner'))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, f"{prefix}ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
-        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
+        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, f'{prefix}boundary'))
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
-        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
+        m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, f'{prefix}strict'))
+        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, f"{prefix}strict"))
+
+    return m
+
+
+def compute_metrics_for_variant(
+    variant: str,
+    all_pred_blocks: List[List[EntityBlock]],
+    all_gold_blocks: List[List[EntityBlock]],
+    rel_schema: Optional[List[str]] = None,
+    ent_schema: Optional[List[str]] = None,
+    all_pred_offsets: Optional[List[Tuple]] = None,
+    all_gold_offsets: Optional[List[Tuple]] = None,
+) -> Dict[str, float]:
+    """
+    Text-based metrics for the variant, plus offset-based metrics (prefixed
+    ``offset_``) when offset bundles are supplied.
+    """
+    if variant not in VALID_VARIANTS:
+        raise ValueError(f"Unknown variant {variant!r}.")
+
+    # Single-pass extraction across all sentences
+    pred_bundles = [extract_from_blocks(p_block) for p_block in all_pred_blocks]
+    gold_bundles = [extract_from_blocks(g_block) for g_block in all_gold_blocks]
+
+    m = score_bundles(variant, pred_bundles, gold_bundles, rel_schema, ent_schema, prefix="")
+
+    if all_pred_offsets is not None and all_gold_offsets is not None:
+        m.update(score_bundles(
+            variant, all_pred_offsets, all_gold_offsets, rel_schema, ent_schema, prefix="offset_"
+        ))
 
     return m

@@ -44,6 +44,7 @@ class S2GCollator:
         self.random_graph = config.get('random_graph', False)
         self.use_rejection = config.get('use_rejection', True)
         self.use_nesting = config.get('use_nesting', True)
+        self.dedup = config.get('dedup', True)
         self.prompt_type = config.get('prompt_type', 'natural')
         self.tok: S2GTokens = S2GTokens(self.variant, use_rejection=self.use_rejection)
         self.rng = random.Random(config.get('seed', 0))
@@ -86,7 +87,8 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), variant='re', use_types=True
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel),
+            variant='re', use_types=True, dedup=self.dedup
         )
         dec = build_graph(
             blocks, 're', self.tok, 
@@ -105,7 +107,8 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(), set(pos_rel), variant='boundary_re', use_types=False
+            inst['entities'], inst['relations'], set(), set(pos_rel),
+            variant='boundary_re', use_types=False, dedup=self.dedup
         )
         dec = build_graph(
             blocks, 'boundary_re', self.tok, 
@@ -123,7 +126,8 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(), set(pos_rel), variant='boundary_joint', use_types=False
+            inst['entities'], inst['relations'], set(), set(pos_rel),
+            variant='boundary_joint', use_types=False, dedup=self.dedup
         )
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
@@ -144,7 +148,8 @@ class S2GCollator:
             random_order=self.random_prompt, prompt=self.prompt_type
         )
         blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel), variant='joint', use_types=True
+            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel),
+            variant='joint', use_types=True, dedup=self.dedup
         )
         dec = build_graph(
             blocks, 'joint', self.tok, 

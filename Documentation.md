@@ -59,6 +59,8 @@ By default, S2G uses natural language instruction prompts for the encoder input 
    * **`re`**: Relation extraction with the entity *type* schema supplied in the prompt (entity spans are still predicted, not given). **Only entities that act as a head in at least one relation get their own block** (`<extra_id_i> head <e_type> head_type <r_type> rel <tail> tail <e_type> tail_type`). Non-participating entities and tail-only entities are omitted as head blocks.
    * **`boundary_re`**: Relation extraction between entity spans without entity types. **Only entities that act as a head in at least one relation get their own block** (`<extra_id_i> head <r_type> rel <tail> tail`). Non-participating entities and tail-only entities are omitted as head blocks.
 5. **Rejection & Null Blocks**: Optional negative schema type markers (`<null> type`) included in Graph outputs to force explicit model rejection of absent entity or relation types.
+6. **Deduplication (`graph.dedup`)**: Controls whether repeated mentions collapse when the *target* is built. Deduplication keys on `(text, type)`, so homographs are never merged. Parsing never deduplicates.
+7. **Dual scoring**: Every evaluation reports text-based metrics and offset-based metrics (`offset_` prefix) side by side. Gold comes from the preprocessed annotations, never from parsing the model's own target format.
 
 ---
 
@@ -180,6 +182,23 @@ Handles nested graph building (each entity mention co-located with its outgoing 
 
 #### Key Functions
 
+##### `organise_filter_and_block(entities, relations, allowed_ent_types, allowed_rel_types, variant='joint', use_types=True, dedup=True) -> List[EntityBlock]`
+Turns raw instance annotations into the block list that `build_graph` linearises.
+
+1. Filters entities to `allowed_ent_types` (skipped when `use_types=False`) and relations to `allowed_rel_types` whose head **and** tail survived; sorts both by offset.
+2. Selects which entities are entitled to a block — `joint` / `boundary_joint` emit every entity, `re` / `boundary_re` only those heading at least one relation.
+3. Builds the blocks, governed by `dedup`.
+4. Attaches each relation to its head block.
+
+**`dedup`** (config key `graph.dedup`) controls collapsing:
+
+| `dedup` | Entities | Relations |
+|---|---|---|
+| `True` (default) | Mentions merge on **`(text, type)`** | Merge on `(head_text, head_type, rel_type, tail_text, tail_type)` |
+| `False` | One block per mention | Every relation kept |
+
+Keying on `(text, type)` rather than text alone is what keeps **homographs** — `Washington` the person versus `Washington` the location — as separate blocks. Boundary variants carry `type=None`, so their key degenerates to text, as intended.
+
 ##### `build_graph(ent_blocks, variant, tokens, use_nesting=True, random_graph=False, use_rejection=False, rejected_ent_types=None, rejected_rel_types=None) -> str`
 * Constructs linearised nested Graph target string:
   * **Variant `joint` / `boundary_joint`**:
@@ -195,9 +214,22 @@ Handles nested graph building (each entity mention co-located with its outgoing 
 * State-machine parser:
   1. Tracks the active head entity via `<extra_id_i>`, parses its mention text and optional `<e_type>`.
   2. Reads relations introduced by `<r_type>` / `<nr_type>`, and tail text/type after `<tail>`.
-  3. Reconstructs structured `EntityBlock` list and extracts evaluation triplets.
-* Tolerant of malformed generations: a sentinel index that has already been filled starts a **new** block rather than overwriting the existing one, and tail mentions that never appear as a head block are appended as entities so they still count towards NER recall.
-* Types are resolved leniently — a block with no `<e_type>` inherits a type from any relation that names it as a tail.
+  3. Reconstructs the structured `EntityBlock` list.
+* **Parsing never deduplicates, for any variant.** Every emitted block is retained, so repeated mentions and repeated relations survive into scoring exactly as generated. Deduplication is a *target construction* concern only (`graph.dedup`), never a parsing one.
+* Tolerant of malformed generations: a sentinel index that has already been filled starts a **new** block rather than overwriting the existing one.
+
+##### `resolve_tail_entities(entities: List[EntityBlock]) -> List[EntityBlock]`
+Reconciles relation tails against the entity blocks, in place. Shared by `parse_graph` and by gold construction (`s2g.evaluation.gold`), so both sides of a comparison are reconciled identically.
+
+* A tail mention resolves to the **first** block carrying that text. The joint variants never emit tail types inline, so the type has to be recovered from the entity's own block, and duplicated mentions must resolve deterministically.
+* Tails with no block of their own are appended as entities, so they still count towards NER recall — this is what makes the RE variants scorable on entities at all.
+* Type resolution runs both ways: an untyped relation inherits `tail_type` from its matched block (the joint case), and an untyped block inherits a type from an inline `<e_type>` on a relation naming it as tail (the RE case).
+
+> **Known limitation (strict scoring ceiling).** First-occurrence matching cannot be *correct* for a homograph tail in the joint variants: if `Washington [person]` precedes `Washington [location]`, a relation pointing at the latter resolves to the former. This is inherent to the joint format, where tail types are never emitted inline and surface text is the only handle.
+>
+> Since gold is now read from the annotation rather than round-tripped through the target format (§4.3), gold carries the *true* tail type while the prediction carries the first-occurrence one. The model is therefore genuinely penalised on these triples, and a flawless generation cannot reach `strict_f1 = 1.0` on a sentence containing a homograph tail. This is honest measurement, not a bug — but it is a ceiling worth knowing about when reading strict numbers. `tests/test_metrics.py::TestHomographLimits` pins the behaviour.
+>
+> Affected volume is small: 0 cases in CoNLL04 and NYT, 3 in SciERC train, and 28 / 1 / 4 in `scierc_doc` train / val / test. Emitting inline tail types for `joint` would be the only real fix.
 
 ---
 
@@ -223,6 +255,25 @@ Every preprocessor emits one JSON object per line in this shape, and `S2GCollato
 `entity_types` / `rel_types` are what `sample_types` treats as positives; everything else in the corpus schema is a negative candidate. Instances with no entities or no relations are retained (mirroring REBEL), and yield an empty target graph.
 
 Alongside the splits, each preprocessor writes `entity.schema` and `relation.schema` — one type per line, sorted, derived from the **train** split only, and read back by `load_schema` / `load_ent_schema`.
+
+#### Annotation Identity: the Offset Rule
+
+**An entity annotation is identified by its offset.** Every preprocessor keys entities on `(start, end)`, which fixes what counts as a duplicate:
+
+* The **same span** recorded more than once is one annotation. NYT has no standalone entity list — mentions are derived from relation participants, so a span heading three relations is annotated three times — and `entities_registry` collapses those to one record. SciERC's `span_idx` / `span_to_ent` do the same. CoNLL04 needs no collapsing; its entity list is already offset-unique.
+* The **same surface text at different offsets** is two annotations, and both are kept. This is the case that matters for scoring: a sentence mentioning `Moscow` twice, each in its own relation, carries two gold entities and two gold relations.
+* **Homographs** follow automatically. Type never participates in the key, so a differing type can neither merge nor drop a mention.
+
+Duplicate counts under this rule, per split (train / val / test):
+
+| Dataset | Entities | Relations | Surface forms at multiple offsets | Extra entity records | Homographs |
+|---|---|---|---|---|---|
+| conll04 | 3377 / 893 / 1079 | 1283 / 343 / 422 | 59 / 18 / 18 | 62 / 18 / 20 | 0 / 0 / 0 |
+| nyt | 121450 / 10848 / 10836 | 94222 / 8489 / 8616 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| scierc | 5598 / 811 / 1685 | 3219 / 455 / 974 | 64 / 12 / 11 | 67 / 13 / 12 | 3 / 0 / 0 |
+| scierc_doc | 5598 / 811 / 1685 | 3219 / 455 / 974 | 496 / 69 / 115 | 639 / 88 / 164 | 28 / 1 / 4 |
+
+> **Note.** NYT has no repeated-text entities at all: each surface form gets one canonical span per sentence. Its duplication shows up only as repeated relation triples (5856 / 504 / 496), which share head *and* tail offsets and are therefore the same annotation stated twice — correctly collapsed. NYT's raw `spo_details` contain **zero** spans with conflicting types in any split.
 
 ---
 
@@ -267,6 +318,7 @@ Configuration is passed as a plain dict (assembled in `train.py` / `evaluate.py`
 | `random_graph` | Shuffle entity and relation order in the target. |
 | `use_rejection` | Append `<null> type` markers for sampled negatives. |
 | `use_nesting` | Use `<nr_type>` for a head's 2nd+ relations; when `False`, every relation uses `<r_type>`. |
+| `dedup` | Collapse entities on `(text, type)` and relations on the full quintuple during block building. See `organise_filter_and_block`. |
 | `max_steps`, `pos_rate_*`, `neg_rate_*`, `pos_max_*`, `neg_max_*` | Bernoulli curriculum endpoints. |
 | `seed` | Seeds the collator's private `random.Random`. |
 
@@ -328,7 +380,12 @@ The `evaluation` package provides corpus-level and per-type macro metric calcula
 ### 4.1. `s2g/evaluation/metrics.py`
 
 #### Purpose
-Scores predicted against gold `EntityBlock` lists. Matching is **text-and-type based** — spans are compared by surface string, not by offset, since the decoder emits text rather than indices.
+Scores predictions against gold on **two parallel tracks**:
+
+* **Text-based** — spans compared by surface string, the historical behaviour.
+* **Offset-based** (prefix `offset_`) — every predicted mention is located in the source token sequence and compared by span index, matching how the corpora actually annotate.
+
+Both tracks are reported from every evaluation. Text metrics keep their original keys and values.
 
 #### Types
 * `Triplet`: `(head_text, rel_type, tail_text)` — relation *boundary* match.
@@ -346,8 +403,13 @@ Micro (corpus-level) PRF: accumulates `|pred ∩ gold|`, `|pred|` and `|gold|` a
 ##### `per_type_macro(all_predicted, all_gold, type_fn, schema, prefix) -> Dict[str, float]`
 REBEL-style macro: computes a global micro PRF **per type in `schema`**, then averages unweighted across types. Types absent from both predictions and gold contribute 0.0, matching `re_score()` in REBEL's `score.py`. Returns `macro_{prefix}_precision|recall|f1`.
 
-##### `compute_metrics_for_variant(variant, all_pred_blocks, all_gold_blocks, rel_schema=None, ent_schema=None)`
-Extracts everything in one pass, then **discards out-of-schema predictions** — predicted relation types not in `rel_schema` and entity types not in `ent_schema` are dropped before scoring, again matching REBEL, which only iterates over known types. Gold is never filtered.
+##### `score_bundles(variant, pred_bundles, gold_bundles, rel_schema, ent_schema, prefix='')`
+Scores per-instance `(triplets, quintuples, entities, mentions)` bundles. **Discards out-of-schema predictions** — predicted relation types not in `rel_schema` and entity types not in `ent_schema` are dropped before scoring, matching REBEL, which only iterates over known types. Gold is never filtered.
+
+Text tuples and offset tuples share the same positional layout — the type sits at index 1 of a mention or triplet and index 2 of a quintuple — so one scoring path serves both. Only `prefix` differs (`''` vs `'offset_'`).
+
+##### `compute_metrics_for_variant(variant, all_pred_blocks, all_gold_blocks, rel_schema=None, ent_schema=None, all_pred_offsets=None, all_gold_offsets=None)`
+Extracts text tuples from the blocks in one pass and calls `score_bundles` with `prefix=''`; when offset bundles are supplied it calls it a second time with `prefix='offset_'` and merges the result.
 
 Metrics emitted per variant:
 
@@ -360,14 +422,59 @@ Metrics emitted per variant:
 
 Each prefix yields `_precision`, `_recall` and `_f1`. `ner_boundary` is micro-only — there is no type to group a macro average by. Because the boundary variants emit no `strict_f1`, their configs must set `validation.early_stopping_metric: boundary_f1`.
 
+Every row above is emitted a second time with an `offset_` prefix (`offset_ner_boundary_f1`, `macro_offset_strict_f1`, ...), matched on offsets instead of text:
+
+| Metric key prefix | Matched tuple |
+|---|---|
+| `offset_ner_boundary_*` | `(start, end)` |
+| `offset_ner_*`, `macro_offset_ner_*` | `((start, end), head_type)` |
+| `offset_boundary_*`, `macro_offset_boundary_*` | `(head_span, rel_type, tail_span)` |
+| `offset_strict_*`, `macro_offset_strict_*` | `(head_span, head_type, rel_type, tail_span, tail_type)` |
+
 ---
 
-### 4.2. `s2g/evaluation/evaluator.py`
+### 4.2. `s2g/evaluation/offsets.py`
 
 #### Purpose
-Decodes model output straight from batch tensors, parses it into blocks, and drives a constant-memory evaluation loop that streams per-instance records to disk.
+Projects predicted graphs onto source offsets. The decoder emits surface text, so a prediction has to be located in the token sequence before it can be scored against offset annotations.
 
-#### `S2GEvaluator(tokenizer, tokens, variant, rel_schema, ent_schema)`
+##### `OffsetResolver(tokens)`
+`resolve(text)` returns **every** offset where the mention occurs, by sliding a window of `len(text.split())` tokens over the source. Results are memoised per instance, so a mention resolves to the same offsets whether met as an entity block, a relation head, or a relation tail — otherwise a triplet's endpoints could disagree with the entity predictions drawn from the same text.
+
+Text occurring nowhere in the source is a **hallucination**. It receives a unique negative sentinel offset `(-1, -n)` rather than being dropped: dropping would quietly inflate precision, whereas a sentinel can never match gold yet still counts towards the prediction total. Sentinels appear in the per-instance records, so hallucinated mentions can be inspected directly.
+
+##### `project_blocks(blocks, tokens) -> (bundle, resolution_map)`
+Emits **one predicted entity per match**, and expands each relation over the **cross product** of its head and tail matches: a head matching *k* times and a tail matching *m* times yields *k x m* predicted relation instances. Also returns the text -> offsets map that produced the bundle, for inclusion in the evaluation records.
+
+This is what repairs duplicate-mention recall. Given a sentence where `Moscow` occurs twice and both occurrences are gold tails of the same head, a model emitting the relation **once** is credited with both gold annotations, because the single emission projects onto both offsets.
+
+Conversely, offset scoring is naturally set-like on spans: emitting the same mention twice still projects onto the same offsets, so duplicate predictions cannot be rewarded twice.
+
+> **Known limitation (offset precision ceiling).** Projection is blind to *which* occurrence the model meant. A mention emitted once projects onto **every** occurrence of its text, so when a surface form is ambiguous the extra projections are wrong by construction: recall is unaffected, precision pays. On the `Washington` homograph sentence a flawless generation scores `offset_boundary_recall = 1.0` but `offset_boundary_precision = 0.5`, and both `Washington` spans inherit both predicted types, so `offset_ner_f1 < 1.0` even though `offset_ner_boundary_f1 = 1.0`.
+>
+> This follows directly from the "each matched offset is a unique prediction" rule and applies to *unambiguous* repeated mentions too — there it is exactly the desired behaviour, since every occurrence really is gold. Only genuinely ambiguous forms pay. `tests/test_metrics.py::TestHomographLimits` pins the behaviour.
+
+---
+
+### 4.3. `s2g/evaluation/gold.py`
+
+#### Purpose
+Builds gold **directly from the preprocessed instance**. Gold was previously obtained by parsing the collated labels, which made it a round trip through `build_graph` -> `parse_graph` and silently inherited every lossy step of that path: targets truncated at `max_target_length` lost their tail, and joint tail types were recovered by surface matching instead of being read off the annotation.
+
+##### `build_gold_blocks(instance, variant, dedup=True) -> List[EntityBlock]`
+Runs `organise_filter_and_block` on the raw instance, passing the instance's own `entity_types` / `rel_types` as the allowed schema. This reproduces `budget` sampling exactly — budget keeps every positive and only pads the prompt with negatives, so nothing in the gold graph is ever filtered out, and evaluation always runs in budget mode via `to_eval_mode()`. The result is passed through `resolve_tail_entities`, since predictions are reconciled the same way; without it the RE variants would score every tail mention as a precision error.
+
+##### `build_gold_offsets(instance, variant) -> bundle`
+Reads offsets straight off the annotation, **independent of `dedup`** — a deduplicated block keeps only its first offset, so offset gold cannot be derived from blocks without losing exactly the repeated mentions it exists to measure. For `re` / `boundary_re` it is restricted to relation participants, since those variants never ask the model for non-participating entities and scoring against them would cap recall at an unreachable value.
+
+---
+
+### 4.4. `s2g/evaluation/evaluator.py`
+
+#### Purpose
+Decodes model output straight from batch tensors, parses it into blocks, pairs it with gold from the dataset, and drives a constant-memory evaluation loop that streams per-instance records to disk.
+
+#### `S2GEvaluator(tokenizer, tokens, variant, rel_schema, ent_schema, dedup=True)`
 
 ##### `clean_text(text) -> str`
 Strips pad / EOS / BOS strings and collapses whitespace. The S2G special tokens and sentinels are deliberately **kept** — the parser needs them.
@@ -375,39 +482,219 @@ Strips pad / EOS / BOS strings and collapses whitespace. The S2G special tokens 
 ##### `parse_text(text) -> (blocks, rejected)`
 `clean_text` followed by `parse_graph`.
 
-##### `process_batch_outputs(input_ids, generated_ids, labels) -> (pred_blocks, gold_blocks, records)`
-Replaces `-100` with the pad id, then batch-decodes predictions and labels with `skip_special_tokens=False` (inputs are decoded with `skip_special_tokens=True`). Parses both sides and builds a per-instance record:
+##### `build_gold(instance) -> (blocks, offset_bundle)`
+Thin wrapper over `build_gold_blocks` / `build_gold_offsets` using the configured variant and `dedup`.
+
+##### `process_batch_outputs(input_ids, generated_ids, labels, instances) -> (pred_blocks, gold_blocks, pred_offsets, gold_offsets, records)`
+Replaces `-100` with the pad id, then batch-decodes predictions with `skip_special_tokens=False` (inputs with `skip_special_tokens=True`). Parses the prediction, projects it onto offsets, and pairs it with gold built from `instances`. The decoded labels are retained **only** as a debugging field.
+
+Per-instance record:
 
 ```json
-{"text": "...", "prediction_raw": "...", "gold_raw": "...",
- "parsed_pred_blocks": [], "parsed_gold_blocks": [], "rejected": []}
+{"text": "...", "encoder_input": "...", "prediction_raw": "...", "gold_raw": "...",
+ "parsed_pred_blocks": [], "gold_blocks": [],
+ "pred_offsets": {"mention text": [[start, end]]}, "rejected": []}
 ```
 
-Gold blocks come from the **collated labels**, not from the raw dataset — so gold is reconstructed through exactly the same linearise $\rightarrow$ parse round trip as the prediction, and any schema sampling applied by the collator applies to both sides.
+Negative values in `pred_offsets` mark hallucinated mentions.
 
-##### `compute_final_metrics(all_pred_blocks, all_gold_blocks)`
+> **Breaking change.** `parsed_gold_blocks` is now `gold_blocks` and is dataset-derived; `text` is the source sentence rather than the decoded prompt, which moved to `encoder_input`; `pred_offsets` is new. Anything consuming `{split}_results.jsonl` needs updating.
+
+##### `compute_final_metrics(all_pred_blocks, all_gold_blocks, all_pred_offsets=None, all_gold_offsets=None)`
 Thin wrapper over `compute_metrics_for_variant` with the configured variant and schemas.
 
 ##### `run_evaluation(dataset, split, dataloader, out_dir, model, max_target_length, num_beams, device, constraint_decoding=False, length_penalty=None, early_stopping=None, no_repeat_ngram_size=None)`
 Streaming loop under `torch.inference_mode()`:
 1. Moves the batch to `device`, entering `torch.autocast` when the model dtype is `bfloat16` / `float16` on CUDA.
 2. Calls `model.generate`; beam-only arguments (`length_penalty`, `early_stopping`, `no_repeat_ngram_size`) are attached only when `num_beams > 1`. When `constraint_decoding=True`, an FSM `LogitsProcessor` from `s2g.model` is added.
-3. Parses the batch and **flushes records to `{split}_results.jsonl` immediately**, keeping only the parsed blocks in memory.
+3. Slices the corresponding instances out of `dataset` and parses the batch, then **flushes records to `{split}_results.jsonl` immediately**, keeping only the parsed blocks and offset bundles in memory.
 4. Writes aggregate metrics to `{split}_metrics.json` and returns them.
 
-> **Note.** Only the parsed block lists are accumulated across the corpus; raw text never is. This is what keeps memory flat on large test sets.
+> **Gold alignment.** Instances are taken from `dataset` by position via a running cursor. This is sound because both callers build the loader with `shuffle=False` and no `drop_last`, so batch *n* is a contiguous slice. A mismatch between the cursor and `len(dataset)` at the end of the loop is logged as a warning.
+
+> **Note.** Only the parsed block lists and offset bundles are accumulated across the corpus; raw text never is. This is what keeps memory flat on large test sets.
 
 ---
 
-## 5. Summary Matrix of Module Responsibilities
+### 4.5. Worked Evaluation Example
+
+A real instance from `data/conll04/test.jsonl`, chosen because it repeats a mention. Tokens (indexed):
+
+```text
+0:Dancers 1:of 2:Moscow 3:'s 4:Bolshoi 5:Ballet 6:in 7:Moscow 8:and 9:Leningrad 10:'s 11:Kirov 12:Ballet ...
+```
+
+`Moscow` is annotated **twice**, at `[2,3]` and `[7,8]`, and `Bolshoi Ballet` is based in *both*:
+
+```text
+(Bolshoi Ballet [4,6], organization based in, Moscow [2,3])
+(Bolshoi Ballet [4,6], organization based in, Moscow [7,8])
+(Kirov Ballet  [11,13], organization based in, Leningrad [9,10])
+```
+
+#### Step 1 — gold, both tracks
+
+| | Entities | Relations |
+|---|---|---|
+| Text gold | 10 | **4** |
+| Offset gold | 11 | **5** |
+
+The text track loses one relation and one entity outright: `(Bolshoi Ballet, organization based in, Moscow)` is one string tuple no matter how many times it is annotated. This is failure mode 1 — the ceiling sits below the true annotation count, so a model cannot reach 100% recall even in principle.
+
+#### Step 2 — a prediction
+
+Suppose the model emits one correct relation, the entity it points at, and one hallucination:
+
+```text
+<extra_id_0> Bolshoi Ballet <e_type> organization <r_type> organization based in <tail> Moscow
+<extra_id_1> Moscow <e_type> location
+<extra_id_2> Atlantis <e_type> location
+```
+
+#### Step 3 — projection onto offsets
+
+```json
+{"Bolshoi Ballet": [[4, 6]], "Moscow": [[2, 3], [7, 8]], "Atlantis": [[-1, -1]]}
+```
+
+`Moscow` matches twice, so the single emitted relation expands into **two** predicted triplets — `(4,6) -> (2,3)` and `(4,6) -> (7,8)` — both of which are gold. `Atlantis` occurs nowhere in the source and takes the sentinel `(-1,-1)`.
+
+#### Step 4 — scores
+
+| Metric | Text | Offset |
+|---|---|---|
+| `ner_boundary_precision` | 0.667 | 0.750 |
+| `ner_boundary_recall` | 0.200 | 0.273 |
+| `boundary_precision` | 1.000 | 1.000 |
+| `boundary_recall` | **0.250** | **0.400** |
+
+Relation recall rises from 1/4 to 2/5: the one emitted relation is credited against **both** gold annotations, because the mention it names genuinely occurs at both offsets. Precision is unharmed — both projections are correct — while the hallucinated `Atlantis` still counts against entity precision on both tracks rather than vanishing.
+
+> Contrast with the ambiguous case in §2.2 and §4.2: here both occurrences of `Moscow` carry the same type, so every projection is right. Had they been a homograph, the extra projection would have been wrong and precision would have fallen instead.
+
+---
+
+## 5. Module: `s2g.training`
+
+### 5.1. `s2g/training/trainer.py`
+
+#### `S2GTrainer(Seq2SeqTrainer)`
+Extra constructor keywords beyond `Seq2SeqTrainer`: `variant`, `tokens`, `ent_schema`, `rel_schema`, `eval_train_dataset`, `scheduler_type`, `dedup`.
+
+##### `create_scheduler(...)`
+Adds an **inverse square root** schedule (linear warmup, then `sqrt(warmup / step)`) when `scheduler.type: inverse_sqrt`. Because HF has no such type, `train.py` passes `lr_scheduler_type='constant'` in that case and this override takes over.
+
+##### `get_eval_dataloader(eval_dataset=None)`
+Swaps in a budget-mode collator, then defers to `Trainer` so distributed sharding, pinned memory and prefetching are preserved. Also records the dataset for gold construction, and drops HF's cached `"eval"` dataloader whenever the requested dataset changes — `Trainer` caches every non-string eval dataset under that single key when `dataloader_persistent_workers` is set, so alternating between the validation set and the train subset would otherwise reuse whichever loader was built first.
+
+##### `evaluate(eval_dataset=None, **gen_kwargs)`
+Runs the normal validation pass, then a second pass over `eval_train_dataset` under the `eval_train` prefix for train/val gap monitoring. Early-stopping callbacks are detached for that second pass and restored in a `finally`, so the train subset can never trigger early stopping.
+
+##### `compute_metrics_hf(eval_preds)`
+Decodes predictions, parses them, then takes gold from the dataset recorded by `get_eval_dataloader` and projects predictions onto offsets.
+
+##### `gold_instances(num_preds)`
+Returns the backing instances in prediction order, or `None` when that order cannot be trusted — in which case `compute_metrics_hf` falls back to the old label round trip and reports **text metrics only**, with a warning. Falls back when:
+
+* no eval dataset was recorded;
+* `world_size > 1` — HF's distributed eval sampler shards strided, so gathered predictions no longer follow dataset order and positional pairing would score every prediction against the wrong gold;
+* `len(dataset) != num_preds`.
+
+Single-process runs are unaffected, which includes all of `evaluate.py` and `train.py`'s post-training evaluation (both guarded by `is_world_process_zero`).
+
+---
+
+### 5.2. `s2g/training/callbacks.py`
+
+| Callback | Responsibility |
+|---|---|
+| `StepTrackingCallback` | Writes `state.global_step` into the collator's shared-memory counter each step, driving the bernoulli curriculum. |
+| `GenerateTextSamplesCallback` | Every `callbacks.sample_generation_interval` steps (and once at train begin), generates from a fixed 8-instance sample and logs a W&B table: source, encoder input, predicted/gold entities, triplets and raw graphs. Rank-0 only; exceptions are logged, never raised. |
+| `PeriodicCheckpointCallback` | Forces a save every `checkpoint.every_n_steps` and writes `run_metadata.json` (`wandb_run_id`, `last_step`) for resumable W&B runs. |
+| `S2GEarlyStoppingCallback` | `EarlyStoppingCallback` that refuses to increment its patience counter while the best metric is still `<= 0.0`, so a model that has not yet produced a parseable graph is not killed early. |
+| `load_run_metadata(output_dir)` | Reads `run_metadata.json` back for W&B resume; returns `None` with a warning if absent. |
+
+---
+
+## 6. Module: `s2g.scripts`
+
+### 6.1. `config_utils.py`
+OmegaConf **structured** config: the `S2GConfig` dataclass tree is the schema, so unknown keys and wrong types are rejected at load time.
+
+`load_config()` extracts `--config <path>` (or `--config=<path>`), merges the YAML over the dataclass defaults, then merges dotlist overrides. `validate_dotlist` rejects anything starting with `-` or missing `=`, so a mistyped flag fails loudly instead of being ignored.
+
+```bash
+python -m s2g.scripts.train --config configs/variants/joint/conll04.yaml \
+    optimizer.lr=1e-4 graph.dedup=false
+```
+
+Config groups: `data`, `model`, `tokenizer`, `prompt`, `graph`, `optimizer`, `scheduler`, `train`, `validation`, `generation`, `evaluation`, `checkpoint`, `callbacks`, `wandb`, `hardware`.
+
+### 6.2. `train.py`
+Fine-tuning and pre-training share this entry point.
+
+1. Sets `CUDA_VISIBLE_DEVICES` from `hardware.gpu_ids` (ignored under `WORLD_SIZE > 1`), seeds everything from `train.seed`.
+2. Initialises W&B, resuming the run id from `run_metadata.json` when `checkpoint.resume_from` is set; writes the resolved config to `{output_dir}/config.yaml`.
+3. Loads train/val datasets; `validation.percent_check` and `validation.train_percent_check` select deterministic `Subset`s.
+4. Loads the model, adds the special tokens, and warm-starts their embeddings when `train.warm_start` **and** no `pretrained_checkpoint` is given.
+5. Builds the collator, callbacks, `Seq2SeqTrainingArguments` and `S2GTrainer`, then trains.
+6. On rank 0: saves `best_model/` with `variant.txt` and `s2g_format.json`, then runs streaming evaluation on val and test and logs `final_val/*` / `final_test/*` to W&B.
+
+**`s2g_format.json`** persists every setting that changes how targets are linearised — `variant`, `prompt_type`, `use_rejection`, `use_nesting`, `dedup`, `max_ent_types`, `max_rel_types` — so standalone evaluation cannot silently score against a different format.
+
+### 6.3. `evaluate.py`
+Standalone evaluation of a saved checkpoint. Reads `s2g_format.json` from the checkpoint directory and prefers it over the evaluation config for every format-critical setting, warning loudly when the sidecar is missing. The variant is resolved from the sidecar, then `variant.txt`, then the config. Collation is forced to budget mode via `to_eval_mode()`.
+
+### 6.4. `measure_lengths.py`
+Scans every split and reports p50/p75/p90/p95/p99/max encoder and decoder token lengths, then suggests `max_source_length` / `max_target_length` as p99 rounded up to a multiple of 32. Sets the collator's step to `max_steps` first, so bernoulli schedules are measured at their worst-case negative-sampling endpoint.
+
+### 6.5. `measure_vram.py`
+Binary-searches the largest train batch size (forward + backward) and eval batch size (`model.generate` at full target length) that fit in VRAM.
+
+> **Not in use:** `inference.py`, `train_rebel.py`, and `s2g/model/constraint_decoder.py`.
+
+---
+
+## 7. Configuration Files
+
+```text
+configs/
+├── pretrain.yaml            # REBEL pre-training (flan-t5-large, bernoulli curriculum)
+├── finetune.yaml            # Generic fine-tuning defaults + per-dataset suggestions
+├── evaluate.yaml            # Standalone evaluation defaults
+├── data/                    # Label prettification maps, consumed by preprocess_*
+│   └── conll04 | nyt | scierc | scierc_doc .yaml
+└── variants/                # Ready-to-run per (variant, dataset) configs
+    └── joint | boundary_joint | re | boundary_re
+        └── conll04.yaml | nyt.yaml
+```
+
+`configs/data/*.yaml` hold `entities:` and `relations:` maps that rename raw corpus labels (`Peop` -> `person`, `OrgBased_In` -> `is based in`); unmapped labels pass through unchanged.
+
+Points worth knowing when writing a new variant config:
+
+* `validation.early_stopping_metric` must be `boundary_f1` for the boundary variants — they emit no `strict_f1`. The offset metrics (`offset_strict_f1`, ...) are also valid choices.
+* `scheduler.type: inverse_sqrt` is handled by `S2GTrainer`, not HF.
+* `graph.dedup`, `graph.use_nesting`, `graph.use_rejection` and `prompt.type` must match between training and evaluation; the `s2g_format.json` sidecar enforces this automatically.
+* CoNLL04 runs use flan-t5-base, ~2882 steps (~100 epochs over 922 sentences at effective batch 32), `constant_with_warmup`, and validate once per epoch (`check_interval: 29`).
+* NYT values are placeholders pending benchmarking.
+
+---
+
+## 8. Summary Matrix of Module Responsibilities
 
 | Package / File | Primary Responsibility |
 |---|---|
 | `s2g.linearisation.special_tokens` | Token registry for `<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>`, and sentinel helper `S2GTokens.sentinel_token(idx)`. |
-| `s2g.linearisation.graph` | Graph construction with `<tail>` token (`build_graph`), state-machine parsing (`parse_graph`), block filtering (`organise_filter_and_block`). |
+| `s2g.linearisation.graph` | Block building with `dedup` (`organise_filter_and_block`), graph construction (`build_graph`), state-machine parsing (`parse_graph`), tail reconciliation (`resolve_tail_entities`). |
 | `s2g.linearisation.prompt` | Encoder input prompt construction for natural language schema instructions. |
 | `s2g.data.dataset` | Memory-mapped JSONL reader (`S2GDataset`) with a vectorised byte-offset index, picklable into DataLoader workers. |
 | `s2g.data.collator` | Schema sampling (`budget` / `bernoulli`), prompt and target construction, tokenisation and label masking (`S2GCollator`). |
 | `s2g.data.preprocess_*` | Corpus-specific converters to the shared instance schema, plus `entity.schema` / `relation.schema` generation. |
-| `s2g.evaluation.metrics` | Micro and per-type macro PRF metric calculation using text-and-type tuple matching. |
+| `s2g.evaluation.metrics` | Micro and per-type macro PRF over text and offset tuples (`score_bundles`). |
+| `s2g.evaluation.offsets` | Projection of predicted mentions onto source offsets, with hallucination sentinels. |
+| `s2g.evaluation.gold` | Gold blocks and gold offset tuples built directly from the preprocessed instance. |
 | `s2g.evaluation.evaluator` | Tensor-direct batch decoding, graph parsing, and the streaming evaluation loop that writes `{split}_results.jsonl` / `{split}_metrics.json`. |
+| `s2g.training.trainer` | Inverse-sqrt scheduling, budget-mode eval loaders, train-subset evaluation, dataset-sourced gold with a DDP guard. |
+| `s2g.training.callbacks` | Curriculum step tracking, W&B sample tables, periodic checkpoints, guarded early stopping. |
+| `s2g.scripts.*` | Structured-config entry points: training, standalone evaluation, length and VRAM budgeting. |

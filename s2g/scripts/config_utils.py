@@ -55,6 +55,7 @@ class GraphConfig:
     random_graph: bool = False
     use_rejection: bool = False
     use_nesting: bool = True
+    dedup: bool = True
 
 @dataclass
 class OptimizerConfig:

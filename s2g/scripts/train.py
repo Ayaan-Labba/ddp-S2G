@@ -132,6 +132,7 @@ def main() -> None:
             'neg_max_end': getattr(cfg.prompt, 'neg_max_end'),
             'use_rejection': cfg.graph.use_rejection,
             'use_nesting': cfg.graph.use_nesting,
+            'dedup': cfg.graph.dedup,
             'random_graph': cfg.graph.random_graph,
             'seed': cfg.train.seed,
         }
@@ -216,6 +217,7 @@ def main() -> None:
         callbacks=callbacks,
         args=training_args,
         scheduler_type=cfg.scheduler.type,
+        dedup=cfg.graph.dedup,
     )
 
     trainer.train(resume_from_checkpoint=cfg.checkpoint.resume_from)
@@ -235,6 +237,7 @@ def main() -> None:
                 'prompt_type':    cfg.prompt.type,
                 'use_rejection':  cfg.graph.use_rejection,
                 'use_nesting':    cfg.graph.use_nesting,
+                'dedup':          cfg.graph.dedup,
                 'max_ent_types':  cfg.prompt.max_ent_types,
                 'max_rel_types':  cfg.prompt.max_rel_types,
             }, indent=2),
@@ -254,6 +257,7 @@ def main() -> None:
             variant=cfg.model.variant,
             rel_schema=rel_schema,
             ent_schema=ent_schema,
+            dedup=cfg.graph.dedup,
         )
 
         val_dataloader = DataLoader(

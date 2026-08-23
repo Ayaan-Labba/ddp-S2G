@@ -11,12 +11,13 @@ from .prompt import (
 from .graph import (
     EntityBlock, RejectedItem, Triplet, 
     build_graph, extract_triplets, organise_filter_and_block, 
-    parse_graph
+    parse_graph, resolve_tail_entities
 )
 
 __all__ = [
     'S2GTokens', 'add_special_tokens_to_tokenizer', 'get_token_ids', 'VALID_VARIANTS',
     'build_boundary_joint_encoder_input', 'build_joint_encoder_input', 'build_re_encoder_input', 
     'build_boundary_re_encoder_input',
-    'EntityBlock', 'RejectedItem', 'Triplet', 'build_graph', 'extract_triplets', 'organise_filter_and_block', 'parse_graph'
+    'EntityBlock', 'RejectedItem', 'Triplet', 'build_graph', 'extract_triplets', 'organise_filter_and_block', 'parse_graph',
+    'resolve_tail_entities'
 ]

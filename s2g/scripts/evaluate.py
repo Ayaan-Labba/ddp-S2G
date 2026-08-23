@@ -47,7 +47,8 @@ def main() -> None:
     else:
         logger.warning(
             "%s not found; falling back to the evaluation config. Verify that "
-            "graph.use_rejection / graph.use_nesting / prompt.type match training.",
+            "graph.use_rejection / graph.use_nesting / graph.dedup / prompt.type "
+            "match training.",
             fmt_file,
         )
 
@@ -61,6 +62,7 @@ def main() -> None:
 
     use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
     use_nesting = fmt.get('use_nesting', cfg.graph.use_nesting)
+    dedup = fmt.get('dedup', cfg.graph.dedup)
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
     tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
@@ -94,6 +96,7 @@ def main() -> None:
             'random_graph': cfg.graph.random_graph,
             'use_rejection': use_rejection,
             'use_nesting': use_nesting,
+            'dedup': dedup,
             'seed': cfg.train.seed,
         }
     )
@@ -114,6 +117,7 @@ def main() -> None:
         variant=variant,
         rel_schema=rel_schema,
         ent_schema=ent_schema,
+        dedup=dedup,
     )
 
     out_dir = Path(cfg.data.output_dir)

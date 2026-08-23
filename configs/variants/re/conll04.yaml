@@ -42,10 +42,10 @@ optimizer:
 
 scheduler:
   type: constant_with_warmup
-  warmup_steps: 346                    # ~12% linear warmup across 200 epochs
+  warmup_steps: 346                    # ~12% linear warmup across the 100-epoch run
 
 train:
-  max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 16
+  max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32
   batch_size: 32                     
   gradient_acc_steps: 1              
   gradient_clip_value: 1.0

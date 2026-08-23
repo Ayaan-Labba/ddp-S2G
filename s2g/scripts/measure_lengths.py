@@ -100,6 +100,7 @@ def main() -> None:
             "max_steps": cfg.train.max_steps,
             "use_rejection": cfg.graph.use_rejection,
             "use_nesting": cfg.graph.use_nesting,
+            "dedup": cfg.graph.dedup,
             "prompt_type": cfg.prompt.type,
             "data_dir": cfg.data.data_dir,
         },
