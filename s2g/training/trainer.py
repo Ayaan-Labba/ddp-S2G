@@ -15,6 +15,7 @@ from transformers import EarlyStoppingCallback, Seq2SeqTrainer
 
 from s2g.linearisation import EntityBlock, VALID_VARIANTS
 from s2g.evaluation import S2GEvaluator
+from s2g.evaluation.offsets import project_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ class S2GTrainer(Seq2SeqTrainer):
         self.ent_schema         = kwargs.pop('ent_schema', [])
         self.rel_schema         = kwargs.pop('rel_schema', [])
         self.tokens             = kwargs.pop('tokens')
+        self.scheduler_type     = kwargs.pop('scheduler_type', None)
+        self.dedup              = kwargs.pop('dedup', True)
+        self._s2g_gold_dataset  = None
 
         super().__init__(compute_metrics=self.compute_metrics_hf, **kwargs)
 
@@ -38,19 +42,20 @@ class S2GTrainer(Seq2SeqTrainer):
             tokens=self.tokens,
             rel_schema=self.rel_schema,
             ent_schema=self.ent_schema,
+            dedup=self.dedup,
         )
 
     def create_scheduler(self,
         num_training_steps: int,
         optimizer: Optional[torch.optim.Optimizer] = None,
-    ) -> None:
+    ):
         """
         Custom Inverse Square Root Scheduler
         """
         if self.lr_scheduler is not None:
             return
 
-        if self.args.lr_scheduler_type == 'inverse_sqrt':
+        if self.scheduler_type == 'inverse_sqrt' or self.args.lr_scheduler_type == 'inverse_sqrt':
             opt = optimizer if optimizer else self.optimizer
             warmup = self.args.get_warmup_steps(num_training_steps)
             self.lr_scheduler = LambdaLR(
@@ -67,20 +72,30 @@ class S2GTrainer(Seq2SeqTrainer):
     def get_eval_dataloader(self, eval_dataset: Optional[Any] = None) -> DataLoader:
         """
         Override evaluation dataloader to use budget-mode collation.
+
+        Swaps the collator and defers to ``Trainer`` so that distributed sharding,
+        pinned memory and prefetching are preserved.
+
+        ``Trainer`` caches every non-string eval dataset under the single key
+        ``"eval"`` when ``dataloader_persistent_workers`` is set, so alternating
+        between the validation set and the train subset would otherwise silently
+        reuse whichever loader was built first. Drop the cache whenever the
+        requested dataset changes.
         """
         dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-        if dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        # ``compute_metrics_hf`` receives only tensors, so remember which dataset
+        # this loop is about to iterate — that is where gold now comes from.
+        self._s2g_gold_dataset = dataset
+        if getattr(self, '_s2g_eval_dataloader_key', None) is not dataset:
+            getattr(self, '_eval_dataloaders', {}).pop('eval', None)
+            self._s2g_eval_dataloader_key = dataset
 
-        collator = self.data_collator.to_eval_mode()
-
-        return DataLoader(
-            dataset=dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            collate_fn=collator,
-            num_workers=self.args.dataloader_num_workers,
-            shuffle=False,
-        )
+        train_collator = self.data_collator
+        self.data_collator = train_collator.to_eval_mode()
+        try:
+            return super().get_eval_dataloader(eval_dataset)
+        finally:
+            self.data_collator = train_collator
 
     def evaluate(self, eval_dataset: Any = None, **gen_kwargs: Any) -> Dict[str, float]:
         """
@@ -92,10 +107,11 @@ class S2GTrainer(Seq2SeqTrainer):
             for cb in early_stopping_callbacks:
                 self.callback_handler.callbacks.remove(cb)
 
+            train_metrics: Dict[str, float] = {}
             try:
                 train_metrics = super().evaluate(
                     eval_dataset=self.eval_train_dataset,
-                    metric_key_prefix='train',
+                    metric_key_prefix='eval_train',
                     **gen_kwargs,
                 )
 
@@ -103,7 +119,7 @@ class S2GTrainer(Seq2SeqTrainer):
                 for cb in early_stopping_callbacks:
                     self.callback_handler.callbacks.append(cb)
 
-                all_metrics.update(train_metrics)
+            all_metrics.update(train_metrics)
 
         return all_metrics
 
@@ -114,12 +130,58 @@ class S2GTrainer(Seq2SeqTrainer):
 
         tokenizer = self.processing_class
         preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
-        labels = np.where(label_ids != -100, label_ids, tokenizer.pad_token_id)
-
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=False)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
 
         pred_blocks: List[List[EntityBlock]] = [self.evaluator.parse_text(p)[0] for p in decoded_preds]
-        gold_blocks: List[List[EntityBlock]] = [self.evaluator.parse_text(g)[0] for g in decoded_labels]
 
-        return self.evaluator.compute_final_metrics(pred_blocks, gold_blocks)
+        instances = self.gold_instances(len(decoded_preds))
+        if instances is None:
+            # Fall back to the old label round trip: without the instances there is
+            # no offset annotation and no source tokens, so only text metrics are
+            # available. Better a narrower report than a silently misaligned one.
+            labels = np.where(label_ids != -100, label_ids, tokenizer.pad_token_id)
+            decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
+            gold_blocks = [self.evaluator.parse_text(g)[0] for g in decoded_labels]
+            return self.evaluator.compute_final_metrics(pred_blocks, gold_blocks)
+
+        gold_blocks, gold_offsets, pred_offsets = [], [], []
+        for inst, p_blocks in zip(instances, pred_blocks):
+            g_blocks, g_offsets = self.evaluator.build_gold(inst)
+            gold_blocks.append(g_blocks)
+            gold_offsets.append(g_offsets)
+            pred_offsets.append(project_blocks(p_blocks, inst.get('tokens', []))[0])
+
+        return self.evaluator.compute_final_metrics(
+            pred_blocks, gold_blocks, pred_offsets, gold_offsets
+        )
+
+    def gold_instances(self, num_preds: int) -> Optional[List[Dict[str, Any]]]:
+        """
+        The instances backing the eval loop that just ran, in prediction order.
+
+        Returns ``None`` whenever that order cannot be trusted. Under DDP the
+        distributed eval sampler shards strided and the gathered predictions no
+        longer follow dataset order, so positional pairing would score every
+        prediction against the wrong gold.
+        """
+        dataset = self._s2g_gold_dataset
+        if dataset is None:
+            logger.warning("No eval dataset recorded; falling back to label-parsed gold.")
+            return None
+
+        if self.args.world_size > 1:
+            logger.warning(
+                "Distributed evaluation (world_size=%d): prediction order does not follow "
+                "dataset order, falling back to label-parsed gold and text-only metrics.",
+                self.args.world_size,
+            )
+            return None
+
+        if len(dataset) != num_preds:
+            logger.warning(
+                "Eval dataset holds %d instances but %d predictions were returned; "
+                "falling back to label-parsed gold.", len(dataset), num_preds,
+            )
+            return None
+
+        return [dataset[i] for i in range(num_preds)]

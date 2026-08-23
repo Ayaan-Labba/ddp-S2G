@@ -71,7 +71,7 @@ def main() -> None:
     variant = cfg.model.variant
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     
-    tokens = S2GTokens(variant, use_rejection=cfg.graph.use_rejection, prompt=cfg.prompt.type)
+    tokens = S2GTokens(variant, use_rejection=cfg.graph.use_rejection)
     add_special_tokens_to_tokenizer(tokenizer, tokens)
 
     rel_schema, ent_schema = load_schema(cfg.data.rel_schema), load_ent_schema(cfg.data.ent_schema)
@@ -100,6 +100,7 @@ def main() -> None:
             "max_steps": cfg.train.max_steps,
             "use_rejection": cfg.graph.use_rejection,
             "use_nesting": cfg.graph.use_nesting,
+            "dedup": cfg.graph.dedup,
             "prompt_type": cfg.prompt.type,
             "data_dir": cfg.data.data_dir,
         },

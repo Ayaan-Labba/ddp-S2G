@@ -15,9 +15,11 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from s2g.evaluation import compute_metrics_for_variant
+from s2g.evaluation.metrics import compute_metrics_for_variant
+from s2g.evaluation.gold import build_gold_blocks, build_gold_offsets
+from s2g.evaluation.offsets import project_blocks
 from s2g.model import build_constraint_processor
-from s2g.linearisation import EntityBlock, S2GTokens, parse_graph, organise_filter_and_block
+from s2g.linearisation import EntityBlock, S2GTokens, parse_graph
 
 
 logger = logging.getLogger(__name__)
@@ -36,12 +38,14 @@ class S2GEvaluator:
         variant: str,
         rel_schema: List[str],
         ent_schema: List[str],
+        dedup: bool = True,
     ) -> None:
         self.tokenizer = tokenizer
         self.tokens = tokens
         self.variant = variant
         self.rel_schema = rel_schema
         self.ent_schema = ent_schema
+        self.dedup = dedup
         self.special_toks = [tok for tok in (tokenizer.pad_token, tokenizer.eos_token, tokenizer.bos_token) if tok]
 
     def clean_text(self, text: str) -> str:
@@ -56,48 +60,86 @@ class S2GEvaluator:
         cleaned = self.clean_text(text)
         return parse_graph(cleaned, tok=self.tokens)
 
-    def process_batch_predictions(
-        self, batch_instances: List[Dict[str, Any]], 
-        generated_ids: torch.Tensor
-    ) -> Tuple[List[List[EntityBlock]], List[Dict[str, Any]]]:
+    def build_gold(self, instance: Dict[str, Any]) -> Tuple[List[EntityBlock], Tuple]:
+        """Gold blocks and gold offset tuples for one preprocessed instance."""
+        return (
+            build_gold_blocks(instance, self.variant, self.dedup),
+            build_gold_offsets(instance, self.variant),
+        )
+
+    def process_batch_outputs(
+        self,
+        input_ids: torch.Tensor,
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+        instances: List[Dict[str, Any]],
+    ) -> Tuple[List[List[EntityBlock]], List[List[EntityBlock]], List[Tuple], List[Tuple], List[Dict[str, Any]]]:
         """
-        Decodes generated token IDs, parses graph blocks, and formats per-instance records.
+        Decodes generated IDs, parses predicted graph blocks and projects them onto
+        source offsets, and pairs them with gold taken from the preprocessed
+        instances.  The decoded labels are retained only as a debugging record.
         """
         preds = generated_ids.cpu().numpy()
         preds = np.where(preds != -100, preds, self.tokenizer.pad_token_id)
         decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=False)
 
+        lbls = labels.cpu().numpy()
+        lbls = np.where(lbls != -100, lbls, self.tokenizer.pad_token_id)
+        decoded_golds = self.tokenizer.batch_decode(lbls, skip_special_tokens=False)
+
+        inps = input_ids.cpu().numpy()
+        inps = np.where(inps != -100, inps, self.tokenizer.pad_token_id)
+        decoded_inputs = self.tokenizer.batch_decode(inps, skip_special_tokens=True)
+
         batch_pred_blocks = []
+        batch_gold_blocks = []
+        batch_pred_offsets = []
+        batch_gold_offsets = []
         batch_records = []
 
-        for inst, raw_pred in zip(batch_instances, decoded_preds):
-            parsed_ents, rejected = self.parse_text(raw_pred)
-            batch_pred_blocks.append(parsed_ents)
+        for raw_inp, raw_pred, raw_gold, inst in zip(decoded_inputs, decoded_preds, decoded_golds, instances):
+            pred_ents, rejected = self.parse_text(raw_pred)
+            gold_ents, gold_offsets = self.build_gold(inst)
+            pred_offsets, offset_map = project_blocks(pred_ents, inst.get('tokens', []))
+
+            batch_pred_blocks.append(pred_ents)
+            batch_gold_blocks.append(gold_ents)
+            batch_pred_offsets.append(pred_offsets)
+            batch_gold_offsets.append(gold_offsets)
+
             batch_records.append(
                 {
-                    'text': inst.get('text', ""),
+                    'text': inst.get('text', self.clean_text(raw_inp)),
+                    'encoder_input': self.clean_text(raw_inp),
                     'prediction_raw': self.clean_text(raw_pred),
-                    'parsed_blocks': parsed_ents,
+                    'gold_raw': self.clean_text(raw_gold),
+                    'parsed_pred_blocks': pred_ents,
+                    'gold_blocks': gold_ents,
+                    # Negative offsets are hallucinated mentions: text the model
+                    # produced that occurs nowhere in the source.
+                    'pred_offsets': offset_map,
                     'rejected': rejected,
-                    'gold_entities': inst.get('entities', []),
-                    'gold_relations': inst.get('relations', []),
                 }
             )
 
-        return batch_pred_blocks, batch_records
+        return batch_pred_blocks, batch_gold_blocks, batch_pred_offsets, batch_gold_offsets, batch_records
 
     def compute_final_metrics(
         self, 
         all_pred_blocks: List[List[EntityBlock]], 
-        all_gold_blocks: List[List[EntityBlock]]
+        all_gold_blocks: List[List[EntityBlock]],
+        all_pred_offsets: Optional[List[Tuple]] = None,
+        all_gold_offsets: Optional[List[Tuple]] = None,
     ) -> Dict[str, float]:
-        """Computes corpus-level macro PRF metrics for the configured variant."""
+        """Computes corpus-level micro and macro PRF metrics for the configured variant."""
         return compute_metrics_for_variant(
             variant=self.variant,
             all_pred_blocks=all_pred_blocks,
             all_gold_blocks=all_gold_blocks,
             rel_schema=self.rel_schema,
             ent_schema=self.ent_schema,
+            all_pred_offsets=all_pred_offsets,
+            all_gold_offsets=all_gold_offsets,
         )
 
     def run_evaluation(
@@ -125,18 +167,20 @@ class S2GEvaluator:
 
         all_pred_blocks: List[List[EntityBlock]] = []
         all_gold_blocks: List[List[EntityBlock]] = []
+        all_pred_offsets: List[Tuple] = []
+        all_gold_offsets: List[Tuple] = []
 
-        batch_size = dataloader.batch_size
         logger.info("Evaluating split '%s' using streaming DataLoader...", split)
 
-        with open(results_file, 'w', encoding='utf-8') as f_out, torch.inference_mode():
-            for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Evaluating ({split})")):
-                start_idx = batch_idx * batch_size
-                end_idx = min(start_idx + batch_size, len(dataset))
-                batch_instances = [dataset[i] for i in range(start_idx, end_idx)]
+        # Gold comes from ``dataset`` by position. Both callers build the loader
+        # with shuffle=False and no drop_last, so batch n is a contiguous slice.
+        cursor = 0
 
+        with open(results_file, 'w', encoding='utf-8') as f_out, torch.inference_mode():
+            for batch in tqdm(dataloader, desc=f"Evaluating ({split})"):
                 input_ids = batch['input_ids'].to(device, non_blocking=True)
                 attention_mask = batch['attention_mask'].to(device, non_blocking=True)
+                labels = batch['labels']
 
                 dtype = next(model.parameters()).dtype
                 ctx = (
@@ -171,20 +215,33 @@ class S2GEvaluator:
                 with ctx:
                     generated_ids = model.generate(**gen_kwargs)
 
-                pred_blocks, batch_records = self.process_batch_predictions(batch_instances, generated_ids)
+                batch_size = input_ids.size(0)
+                instances = [dataset[cursor + i] for i in range(batch_size)]
+                cursor += batch_size
+
+                pred_blocks, gold_blocks, pred_offsets, gold_offsets, batch_records = self.process_batch_outputs(
+                    input_ids=input_ids,
+                    generated_ids=generated_ids,
+                    labels=labels,
+                    instances=instances,
+                )
                 all_pred_blocks.extend(pred_blocks)
-
-                ent_schema_set = set(self.ent_schema)
-                rel_schema_set = set(self.rel_schema)
-
-                for inst in batch_instances:
-                    gold_ents = organise_filter_and_block(inst['entities'], inst['relations'], ent_schema_set, rel_schema_set)
-                    all_gold_blocks.append(gold_ents)
+                all_gold_blocks.extend(gold_blocks)
+                all_pred_offsets.extend(pred_offsets)
+                all_gold_offsets.extend(gold_offsets)
 
                 for record in batch_records:
                     f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-        metrics = self.compute_final_metrics(all_pred_blocks, all_gold_blocks)
+        if cursor != len(dataset):
+            logger.warning(
+                "Consumed %d instances but the dataset holds %d; gold alignment may be off.",
+                cursor, len(dataset),
+            )
+
+        metrics = self.compute_final_metrics(
+            all_pred_blocks, all_gold_blocks, all_pred_offsets, all_gold_offsets
+        )
         with open(metrics_file, 'w', encoding='utf-8') as f:
             json.dump(metrics, f, indent=2)
 

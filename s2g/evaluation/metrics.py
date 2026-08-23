@@ -15,44 +15,49 @@ from typing import Any, Dict, List, Optional, Tuple
 from s2g.linearisation import VALID_VARIANTS
 
 Triplet = Tuple[str, str, str]              # (head_text, rel_type, tail_text)
-Quintuple = Tuple[str, str, str, str, str]  # (head, head_type, rel, tail, tail_type)
-EntityMention = Tuple[str, str]             # (span_text, entity_type)
+Quintuple = Tuple[str, str, str, str, str]  # (head_text, head_type, rel_type, tail_text, tail_type)
+EntityMention = Tuple[str, str]             # (head_text, entity_type)
 EntityBlock = Dict[str, Any]
 
 
 def extract_from_blocks(blocks: List[EntityBlock]) -> Tuple[List[Triplet], List[Quintuple], List[str], List[EntityMention]]:
     """
-    Single-pass extraction of all evaluation elements from a sentence's EntityBlocks.
+    Single-pass extraction of text-validated evaluation elements from a sentence's EntityBlocks.
     """
     triplets: List[Triplet] = []
     quintuples: List[Quintuple] = []
     entities: List[str] = []
     mentions: List[EntityMention] = []
 
+    ent_map: Dict[str, EntityBlock] = {
+        b['text'].strip(): b for b in blocks if b.get('text')
+    }
+
     for ent in blocks:
-        h_text = ent.get('text', '')
+        h_text = ent.get('text', '').strip()
         h_type = ent.get('type', '')
-        
-        if h_text:
-            entities.append(h_text)
-            if h_type:
-                mentions.append((h_text, h_type))
+
+        if not h_text:
+            continue
+
+        # Entity boundary match: head_text
+        entities.append(h_text)
+        if h_type:
+            # Entity strict match: (head_text, head_type)
+            mentions.append((h_text, h_type))
 
         for rel in ent.get('relations', []):
-            r_type = rel.get('type', '')
-            t_text = rel.get('tail', '')
-            t_type = rel.get('tail_type', '')
+            r_type = rel.get('type', '').strip()
+            t_text = rel.get('tail_text', '').strip()
+            t_ent = ent_map.get(t_text, {})
+            t_type = rel.get('tail_type') or t_ent.get('type', '')
 
-            if h_text and r_type and t_text:
+            if t_text and r_type:
+                # Triplet (Relation boundary): (head_text, rel_type, tail_text)
                 triplets.append((h_text, r_type, t_text))
-
-            if h_type and t_type:
-                quintuples.append((h_text, h_type, r_type, t_text, t_type))
-
-            if t_text:
-                entities.append(t_text)
-                if t_type:
-                    mentions.append((t_text, t_type))
+                if h_type and t_type:
+                    # Quintuple (Relation strict): (head_text, head_type, rel_type, tail_text, tail_type)
+                    quintuples.append((h_text, h_type, r_type, t_text, t_type))
 
     return triplets, quintuples, entities, mentions
 
@@ -118,33 +123,30 @@ def per_type_macro(
 
 
 
-def compute_metrics_for_variant(
+def score_bundles(
     variant: str,
-    all_pred_blocks: List[List[EntityBlock]],
-    all_gold_blocks: List[List[EntityBlock]],
+    pred_bundles: List[Tuple],
+    gold_bundles: List[Tuple],
     rel_schema: Optional[List[str]] = None,
     ent_schema: Optional[List[str]] = None,
+    prefix: str = "",
 ) -> Dict[str, float]:
-    if variant not in VALID_VARIANTS:
-        raise ValueError(f"Unknown variant {variant!r}.")
+    """
+    Scores per-instance ``(triplets, quintuples, entities, mentions)`` bundles.
 
-    # Single-pass extraction across all sentences
-    all_pred_triplets, all_pred_quintuples, all_pred_entities, all_pred_entity_mentions = [], [], [], []
-    all_gold_triplets, all_gold_quintuples, all_gold_entities, all_gold_entity_mentions = [], [], [], []
+    Text tuples and offset tuples share the same positional layout — the type sits
+    at index 1 of a mention/triplet and index 2 of a quintuple — so the same
+    scoring path serves both; only ``prefix`` differs ('' vs 'offset_').
+    """
+    all_pred_triplets = [b[0] for b in pred_bundles]
+    all_pred_quintuples = [b[1] for b in pred_bundles]
+    all_pred_entities = [b[2] for b in pred_bundles]
+    all_pred_entity_mentions = [b[3] for b in pred_bundles]
 
-    for p_block in all_pred_blocks:
-        t, q, e, m = extract_from_blocks(p_block)
-        all_pred_triplets.append(t)
-        all_pred_quintuples.append(q)
-        all_pred_entities.append(e)
-        all_pred_entity_mentions.append(m)
-
-    for g_block in all_gold_blocks:
-        t, q, e, m = extract_from_blocks(g_block)
-        all_gold_triplets.append(t)
-        all_gold_quintuples.append(q)
-        all_gold_entities.append(e)
-        all_gold_entity_mentions.append(m)
+    all_gold_triplets = [b[0] for b in gold_bundles]
+    all_gold_quintuples = [b[1] for b in gold_bundles]
+    all_gold_entities = [b[2] for b in gold_bundles]
+    all_gold_entity_mentions = [b[3] for b in gold_bundles]
 
     # Filter out-of-schema predictions
     rel_set = set(rel_schema) if rel_schema else None
@@ -162,30 +164,60 @@ def compute_metrics_for_variant(
 
     # Entity boundary
     if variant in {'boundary_joint', 'boundary_re', 're', 'joint'}:
-        m.update(corpus_prf(all_pred_entities, all_gold_entities, 'ner_boundary'))
+        m.update(corpus_prf(all_pred_entities, all_gold_entities, f'{prefix}ner_boundary'))
 
     # Entity strict
     if variant in {'joint', 're'}:
         if ent_schema is None:
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, 'ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, "ner"))
+        m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, f'{prefix}ner'))
+        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, f"{prefix}ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, 'boundary'))
-        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, "boundary"))
+        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, f'{prefix}boundary'))
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
         if rel_schema is None:
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, 'strict'))
-        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, "strict"))
+        m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, f'{prefix}strict'))
+        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, f"{prefix}strict"))
+
+    return m
+
+
+def compute_metrics_for_variant(
+    variant: str,
+    all_pred_blocks: List[List[EntityBlock]],
+    all_gold_blocks: List[List[EntityBlock]],
+    rel_schema: Optional[List[str]] = None,
+    ent_schema: Optional[List[str]] = None,
+    all_pred_offsets: Optional[List[Tuple]] = None,
+    all_gold_offsets: Optional[List[Tuple]] = None,
+) -> Dict[str, float]:
+    """
+    Text-based metrics for the variant, plus offset-based metrics (prefixed
+    ``offset_``) when offset bundles are supplied.
+    """
+    if variant not in VALID_VARIANTS:
+        raise ValueError(f"Unknown variant {variant!r}.")
+
+    # Single-pass extraction across all sentences
+    pred_bundles = [extract_from_blocks(p_block) for p_block in all_pred_blocks]
+    gold_bundles = [extract_from_blocks(g_block) for g_block in all_gold_blocks]
+
+    m = score_bundles(variant, pred_bundles, gold_bundles, rel_schema, ent_schema, prefix="")
+
+    if all_pred_offsets is not None and all_gold_offsets is not None:
+        m.update(score_bundles(
+            variant, all_pred_offsets, all_gold_offsets, rel_schema, ent_schema, prefix="offset_"
+        ))
 
     return m

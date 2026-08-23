@@ -1,57 +1,41 @@
 """
-Special token registry for the S2G model.
+Special token registry for the S2G model (fixed-token branch).
 """
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
-
 from transformers import AutoModel, AutoTokenizer
 import torch
 
-# All linearisation token names
-ALL_TOKEN_NAMES: List[str] = [
-    'ner', 're', 'text', 
-    'ent', 'e_type',
-    'head', 'r_type', 'nr_type', 'tail',
-    'null'
-]
-
+# Linearisation tokens, drawn from T5's reserved sentinel range. ``ent`` opens
+# every entity block in every variant — the RE variants used to open theirs with
+# a separate ``head`` token, which the nested scheme makes redundant.
+ALL_TOKEN_NAMES: List[str] = ['ent', 'e_type', 'r_type', 'nr_type', 'tail', 'null']
 VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
+
 class S2GTokens:
-    # Token string mappings for each linearisation token
+    # Assignments are kept stable across the branch's history, so the embeddings
+    # a previous run learned for a given role stay attached to the same token.
     token_strs = {
-        'ner':      '<extra_id_0>', 
-        're':       '<extra_id_1>', 
-        'text':     '<extra_id_2>',
-        'ent':      '<extra_id_3>', 
-        'e_type':   '<extra_id_4>', 
-        'head':     '<extra_id_5>',
-        'r_type':   '<extra_id_6>', 
-        'nr_type':  '<extra_id_7>', 
+        'ent':      '<extra_id_3>',
+        'e_type':   '<extra_id_4>',
+        'r_type':   '<extra_id_6>',
+        'nr_type':  '<extra_id_7>',
         'tail':     '<extra_id_8>',
         'null':     '<extra_id_9>'
     }
 
-    # Token maps for each variant to get active tokens
     base_tok_map = {
-        're':             {'head', 'e_type', 'r_type', 'nr_type', 'tail'},
-        'boundary_re':    {'head', 'r_type', 'nr_type', 'tail'},
-        'boundary_joint': {'ent', 'head', 'r_type', 'nr_type', 'tail'},
-        'joint':          {'ent', 'e_type', 'head', 'r_type', 'nr_type', 'tail'},
+        're':             {'ent', 'e_type', 'r_type', 'nr_type', 'tail'},
+        'boundary_re':    {'ent', 'r_type', 'nr_type', 'tail'},
+        'boundary_joint': {'ent', 'r_type', 'nr_type', 'tail'},
+        'joint':          {'ent', 'e_type', 'r_type', 'nr_type', 'tail'},
     }
 
-    ssi_tok_map = {
-        're':             {'head', 'e_type', 'r_type', 'nr_type', 'tail', 're', 'text', 'ner'},
-        'boundary_re':    {'head', 'r_type', 'nr_type', 'tail', 're', 'text'},
-        'boundary_joint': {'ent', 'head', 'r_type', 'nr_type', 'tail', 're', 'text'},
-        'joint':          {'ent', 'e_type', 'head', 'r_type', 'nr_type', 'tail', 're', 'text', 'ner'},
-    }
-
-    def __init__(self, variant: str, use_rejection: bool = False, prompt: str = 'natural') -> None:
+    def __init__(self, variant: str, use_rejection: bool = False) -> None:
         self.variant = variant
-        active_map = self.ssi_tok_map if prompt == 'ssi' else self.base_tok_map
-        self.active_tokens = active_map.get(variant, active_map['joint']).copy()
+        self.active_tokens = self.base_tok_map.get(variant, self.base_tok_map['joint']).copy()
         if use_rejection: 
             self.active_tokens.add('null')
 
@@ -60,6 +44,11 @@ class S2GTokens:
     @property
     def all_tokens(self) -> List[str]:
         return self._all_tokens
+
+    @property
+    def ent_token(self) -> str:
+        """Block-opening token — the fixed-token counterpart of a rolling sentinel."""
+        return self.token_strs['ent']
 
 
 def add_special_tokens_to_tokenizer(
@@ -77,12 +66,8 @@ def add_special_tokens_to_tokenizer(
 
         if warm_start:
             token_init_phrases = {
-                'ner':      'find entities: ',
-                're':       'find relations: ',
-                'text':     'text: ',
                 'ent':      'entity: ',
                 'e_type':   'entity type: ',
-                'head':     'subject: ',
                 'r_type':   'relation: ',
                 'nr_type':  'next relation: ',
                 'tail':     'object: ',

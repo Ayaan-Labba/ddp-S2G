@@ -14,13 +14,13 @@
 # =============================================================================
 
 model:
-  name: google/flan-t5-large        # Pre-trained Flan-T5 variant (60M params)
+  name: google/flan-t5-large        # Pre-trained Flan-T5 variant (~780M params)
   pretrained_checkpoint: null
   variant: re
 
 tokenizer:
-  max_source_length: 300            # Encoder input budget (SSI + text)
-  max_target_length: 300            # Decoder target budget (SEL)
+  max_source_length: 300            # Encoder input budget (instruction + text)
+  max_target_length: 300            # Decoder target budget (linearised graph)
 
 optimizer:
   optim: adamw_torch                # adamw_bnb_8bit (8-bit AdamW) to save memory
@@ -41,7 +41,7 @@ train:
   gradient_acc_steps: 1            # Effective batch = 64
   gradient_clip_value: 1.0
   precision: bf16                   # "fp16" / "bf16" / "fp32"
-  seed: 0                           # Determines init, data shuffle, SSI sampling
+  seed: 0                           # Determines init, data shuffle, schema sampling
   warm_start: true
 
 validation:
@@ -58,10 +58,10 @@ generation:
 
 prompt:
   mode: bernoulli
-  type: ssi
-  random_prompt: false              # Shuffle SSI type order
-  positive_rate_start: 1.0          # Bernoulli prob. for positives at step 0
-  positive_rate_end: 1.0            # Bernoulli prob. for positives at step T
+  type: natural
+  random_prompt: false              # Shuffle schema type order in the prompt
+  pos_rate_start: 1.0               # Bernoulli prob. for positives at step 0
+  pos_rate_end: 1.0                 # Bernoulli prob. for positives at step T
   neg_rate_start: 1.0               # Bernoulli prob. for selected negatives at step 0
   neg_rate_end: 1.0                 # Bernoulli prob. for selected negatives at step T
   pos_max_start: 1

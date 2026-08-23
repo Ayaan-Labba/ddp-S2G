@@ -20,7 +20,7 @@ model:
 
 tokenizer:
   max_source_length: 240
-  max_target_length: 190            # Max values from `measure_lengths.py`
+  max_target_length: 180            # Max values from `measure_lengths.py`
 
 prompt:
   mode: budget
@@ -42,7 +42,7 @@ optimizer:
 
 scheduler:
   type: constant_with_warmup
-  warmup_steps: 346                    # ~12% linear warmup across 200 epochs
+  warmup_steps: 346                    # ~12% linear warmup across the 100-epoch run
 
 train:
   max_steps: 2882                     # ~100 epochs over 922 sentences with effective batch size 32

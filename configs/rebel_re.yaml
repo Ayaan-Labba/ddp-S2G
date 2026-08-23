@@ -9,7 +9,7 @@
 #   [<HEAD_TYPE> TAIL2 <TAIL2_TYPE> REL2 ...]  ← same head, additional tails
 # Entity type tags (<person>, <organization>, …) are derived from the entity
 # schema and added as new vocabulary tokens.
-# Encoder input: raw source text — no SSI schema prompts.
+# Encoder input: raw source text — no schema instruction prompt.
 #
 # Backbone options
 # ----------------

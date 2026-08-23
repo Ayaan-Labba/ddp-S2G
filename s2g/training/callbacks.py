@@ -105,7 +105,8 @@ class GenerateTextSamplesCallback(TrainerCallback):
         if wandb.run is None: 
             return
 
-        batch = self.collator(self.sample_batch)
+        eval_collator = self.collator.to_eval_mode()
+        batch = eval_collator(self.sample_batch)
         device = next(model.parameters()).device
         k, dtype = self.variant, next(model.parameters()).dtype
 
@@ -183,8 +184,8 @@ class GenerateTextSamplesCallback(TrainerCallback):
             # Format triplets
             p_triplets = extract_triplets(p_ent, include_types=include_types)
             g_triplets = extract_triplets(g_ent, include_types=include_types)
-            p_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in p_triplets]) if p_triplets else "(none)"
-            g_t = "\n".join([f"({t[0]}, {t[1]}, {t[2]})" for t in g_triplets]) if g_triplets else "(none)"
+            p_t = "\n".join([f"{t[0]} --[{t[1]}]--> {t[2]}" for t in p_triplets]) if p_triplets else "(none)"
+            g_t = "\n".join([f"{t[0]} --[{t[1]}]--> {t[2]}" for t in g_triplets]) if g_triplets else "(none)"
 
             row.extend([p_e, g_e, p_t, g_t, p_graph, g_graph])
             rows.append(row)
@@ -228,9 +229,9 @@ class S2GEarlyStoppingCallback(EarlyStoppingCallback):
 
 def load_run_metadata(output_dir: str) -> Optional[Dict[str, Any]]:
     m_path = Path(output_dir) / "run_metadata.json"
-    if m_path.exists():
-        with open(m_path, 'r', encoding='utf-8') as f: return json.load(f)
-    else:
-        raise FileNotFoundError(f"Metaadata file not found: {m_path}")
+    if not m_path.exists():
+        logger.warning("No run metadata at %s; starting a fresh W&B run.", m_path)
+        return None
 
-    return
+    with open(m_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
