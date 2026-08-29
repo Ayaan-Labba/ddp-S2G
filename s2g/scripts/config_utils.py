@@ -112,7 +112,7 @@ class EvaluationConfig:
 @dataclass
 class CheckpointConfig:
     save_top_k: int = 3
-    every_n_steps: int = 1000
+    every_n_steps: Optional[int] = None   # null / 0 = save on validation checks only
     resume_from: Optional[str] = None
 
 @dataclass

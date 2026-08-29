@@ -147,24 +147,36 @@ def main() -> None:
     callbacks = [
         StepTrackingCallback(collator),
         S2GEarlyStoppingCallback(early_stopping_patience=cfg.validation.early_stopping_patience),
+        # `checkpoint.every_n_steps: null` leaves checkpointing to the validation
+        # checks; the callback still records run metadata for W&B resumption.
         PeriodicCheckpointCallback(
             output_dir=cfg.data.output_dir,
             every_n_steps=cfg.checkpoint.every_n_steps,
             wandb_run_id=wandb.run.id if wandb.run else None,
         ),
-        GenerateTextSamplesCallback(
-            sample_batch = [
-                eval_val_dataset[i] 
-                for i in rng.choice(len(eval_val_dataset), size=min(8, len(eval_val_dataset)), replace=False)
-            ],
-            variant = cfg.model.variant,
-            tokenizer = tokenizer,
-            max_target_length = cfg.tokenizer.max_target_length,
-            collator = collator,
-            num_beams = cfg.validation.num_beams,
-            interval = cfg.callbacks.sample_generation_interval
-        )
     ]
+
+    # Samples are drawn from the evaluation split itself and held as a Subset rather
+    # than copied out as instances, so the logged table stays tied to the dataset the
+    # trainer validates on and passes through the same indexing.
+    if eval_val_dataset is not None and len(eval_val_dataset) > 0:
+        sample_indices = rng.choice(
+            len(eval_val_dataset), size=min(8, len(eval_val_dataset)), replace=False
+        ).tolist()
+        callbacks.append(
+            GenerateTextSamplesCallback(
+                sample_dataset=Subset(eval_val_dataset, sample_indices),
+                variant=cfg.model.variant,
+                tokenizer=tokenizer,
+                collator=collator,
+                interval=cfg.callbacks.sample_generation_interval,
+            )
+        )
+    else:
+        logger.warning(
+            "validation.percent_check yields no evaluation subset; "
+            "skipping the sample generation callback."
+        )
 
     # Set up training arguments and trainer
     training_args = Seq2SeqTrainingArguments(

@@ -90,7 +90,7 @@ generation:
 
 checkpoint:
   save_top_k: 1
-  every_n_steps: 100000
+  every_n_steps: null               # null / 0 = save on validation checks only
   resume_from: null
 
 callbacks:

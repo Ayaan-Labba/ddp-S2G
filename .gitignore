@@ -13,3 +13,5 @@ outputs/
 # Logs
 wandb/
 *.log
+# Local-only test scripts (not part of the tracked codebase)
+tests/
