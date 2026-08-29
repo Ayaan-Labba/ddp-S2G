@@ -16,7 +16,7 @@ from s2g.data import S2GCollator, S2GDataset
 from s2g.evaluation import S2GEvaluator
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
 from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
-from s2g.scripts.train import configure_dataloader_start_method
+from s2g.scripts.train import configure_dataloader_start_method, preload_forkserver_modules
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ def main() -> None:
 
     # Must happen before any DataLoader spins up workers (see train.py).
     configure_dataloader_start_method(cfg.hardware.dataloader_start_method)
+    preload_forkserver_modules()
 
     if cfg.hardware.gpu_ids is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = ",".join(map(str, cfg.hardware.gpu_ids))

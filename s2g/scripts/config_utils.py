@@ -130,10 +130,12 @@ class HardwareConfig:
     num_workers: int = 0
     persistent_workers: bool = True
     gpu_ids: Optional[List[int]] = None
-    # DataLoader worker start method. null (the default) leaves the interpreter's
-    # own choice alone — 'fork' before Python 3.14, 'forkserver' from 3.14 on.
-    # Set explicitly only to override that.
-    dataloader_start_method: Optional[str] = None
+    # DataLoader worker start method. 'fork' is what this pipeline ran on before
+    # Python 3.14 flipped the Linux default to 'forkserver', and it is far cheaper:
+    # forked workers share the parent's interpreter pages copy-on-write, where
+    # forkserver workers each re-import torch privately (~250 MB apiece; measured
+    # 81 MB vs 3035 MB for 12 workers). null = leave the interpreter default alone.
+    dataloader_start_method: Optional[str] = 'fork'
 
 @dataclass
 class S2GConfig:

@@ -36,26 +36,29 @@ def configure_dataloader_start_method(method: Optional[str]) -> None:
     """
     Pin the multiprocessing start method used to launch DataLoader workers.
 
-    Defaults to ``None``: leave the interpreter's own choice alone, which is what
-    this pipeline has always done. That was ``fork`` before Python 3.14 and is
-    ``forkserver`` from 3.14 on.
+    Defaults to ``'fork'``, which is what this pipeline ran on until Python 3.14
+    flipped the Linux default to ``'forkserver'`` (gh-84559).
 
-    The knob exists because the two differ in what a worker costs. Under
-    ``forkserver`` each worker is handed a *pickled* copy of the dataset, the
-    tokenizer and the collator over a pipe, instead of inheriting them
-    copy-on-write. That is cheap when the loaders are built once, and ruinous when
-    they are rebuilt repeatedly — see ``S2GTrainer.get_eval_dataloader``, where a
-    per-check rebuild once spawned several hundred worker generations and could
-    OOM-kill the parent partway through writing a payload, leaving the child to
-    report the half it received:
+    The two differ enormously in what a worker costs, and it is the *interpreter*
+    that dominates, not the data. A forked worker shares the parent's already
+    imported torch and transformers pages copy-on-write; a forkserver worker is a
+    fresh interpreter that re-imports them privately, roughly 250 MB apiece.
+    Measured over three loaders of four workers, whole-tree PSS:
+
+        fork                    +   81 MB
+        forkserver              + 3035 MB
+        forkserver + preload    + 1033 MB
+
+    On a memory-tight host those extra gigabytes arrive exactly when the first
+    validation check builds its loaders, and the OOM killer takes the parent
+    mid-spawn — which the forkserver child then reports as a truncated payload:
 
         _pickle.UnpicklingError: pickle data was truncated
 
-    With the loaders cached, ``forkserver`` costs three spawns for a whole run and
-    the default needs no overriding. Set ``'fork'`` to avoid the per-worker copies
-    anyway (worth it for a large corpus, at the cost of a ``DeprecationWarning``
-    about forking a multi-threaded process), or ``'forkserver'`` / ``'spawn'`` to
-    pin one explicitly.
+    ``None`` leaves the interpreter default alone. ``'forkserver'`` / ``'spawn'``
+    pin one explicitly; ``preload_forkserver_modules`` recovers part of the cost
+    when forkserver is in force. The price of ``fork`` is a ``DeprecationWarning``
+    about forking a multi-threaded process.
     """
     if not method:
         return
@@ -68,16 +71,41 @@ def configure_dataloader_start_method(method: Optional[str]) -> None:
         )
         return
 
-    if multiprocessing.get_start_method(allow_none=True) == method:
+    if multiprocessing.get_start_method(allow_none=True) != method:
+        try:
+            multiprocessing.set_start_method(method, force=True)
+        except RuntimeError as exc:
+            logger.warning("Could not set the start method to %r: %s", method, exc)
+            return
+        logger.info("DataLoader worker start method set to %r.", method)
+
+
+def preload_forkserver_modules() -> None:
+    """
+    Import the heavy modules once in the forkserver process, if that is the method
+    in force.
+
+    A forkserver child is forked from the server process, so anything the *server*
+    has already imported is shared copy-on-write instead of being re-imported per
+    worker. For 12 workers this measured 3035 MB without preloading against
+    1033 MB with it — still short of ``fork``'s 81 MB, but enough to matter on a
+    memory-tight host.
+    """
+    try:
+        effective = multiprocessing.get_start_method()
+    except RuntimeError:
+        return
+
+    if effective != 'forkserver':
         return
 
     try:
-        multiprocessing.set_start_method(method, force=True)
-    except RuntimeError as exc:
-        logger.warning("Could not set the start method to %r: %s", method, exc)
+        multiprocessing.set_forkserver_preload(['torch', 'transformers', 's2g.data'])
+    except Exception:
+        logger.debug("Could not set forkserver preload modules.", exc_info=True)
         return
 
-    logger.info("DataLoader worker start method set to %r.", method)
+    logger.info("Preloading torch / transformers into the forkserver process.")
 
 
 def main() -> None:
@@ -87,6 +115,7 @@ def main() -> None:
 
     # Must happen before any DataLoader spins up workers.
     configure_dataloader_start_method(cfg.hardware.dataloader_start_method)
+    preload_forkserver_modules()
 
     # Set cuda devices
     if cfg.hardware.gpu_ids is not None:
