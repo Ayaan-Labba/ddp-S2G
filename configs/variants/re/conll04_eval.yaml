@@ -17,7 +17,7 @@ prompt:
 
 graph:
   use_rejection: true   # must match the training run (variants/re/conll04.yaml)
-  use_nesting: true
+  nesting: nr_type
 
 generation:
   num_beams: 3

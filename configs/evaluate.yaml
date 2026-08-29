@@ -43,7 +43,7 @@ prompt:
 graph:
   random_graph: false
   use_rejection: false
-  use_nesting: true
+  nesting: nr_type
 
 data:
   data_dir: data/conll04

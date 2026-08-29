@@ -28,7 +28,7 @@ prompt:
   random_prompt: False
 
 graph:
-  use_nesting: True
+  nesting: nr_type
   use_rejection: True
   random_graph: False
 

@@ -285,7 +285,7 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
 
-    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection)
+    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection, markers=cfg.graph.markers)
     warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=warm_start)
     model.to(device)

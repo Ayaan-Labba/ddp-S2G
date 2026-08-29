@@ -47,7 +47,8 @@ def main() -> None:
     else:
         logger.warning(
             "%s not found; falling back to the evaluation config. Verify that "
-            "graph.use_rejection / graph.use_nesting / graph.dedup / prompt.type "
+            "graph.use_rejection / graph.markers / graph.nesting / graph.joint_tail_type / "
+            "graph.dedup / prompt.type / prompt.style "
             "match training.",
             fmt_file,
         )
@@ -61,10 +62,13 @@ def main() -> None:
     model = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
 
     use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
-    use_nesting = fmt.get('use_nesting', cfg.graph.use_nesting)
+    markers = fmt.get('markers', cfg.graph.markers)
+    nesting = fmt.get('nesting', cfg.graph.nesting)
+    joint_tail_type = fmt.get('joint_tail_type', cfg.graph.joint_tail_type)
     dedup = fmt.get('dedup', cfg.graph.dedup)
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
-    tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
+    prompt_style = fmt.get('style', cfg.prompt.style)
+    tokens = S2GTokens(variant=variant, use_rejection=use_rejection, markers=markers)
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -92,10 +96,13 @@ def main() -> None:
             'max_rel_types': fmt.get('max_rel_types', cfg.prompt.max_rel_types) or len(rel_schema),
             'mode': cfg.prompt.mode,
             'prompt_type': prompt_type,
+            'prompt_style': prompt_style,
             'random_prompt': cfg.prompt.random_prompt,
             'random_graph': cfg.graph.random_graph,
             'use_rejection': use_rejection,
-            'use_nesting': use_nesting,
+            'markers': markers,
+            'nesting': nesting,
+            'joint_tail_type': joint_tail_type,
             'dedup': dedup,
             'seed': cfg.train.seed,
         }

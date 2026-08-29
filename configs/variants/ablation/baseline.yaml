@@ -1,0 +1,102 @@
+# =============================================================================
+# S2G — CoNLL04 Ablation Baseline
+# =============================================================================
+# Axis 1 / A1: fixed markers · re · nr_type nesting · "Extract" wording · direct.
+#
+# Everything outside the `graph` and `prompt` blocks is held constant across all
+# 24 runs (see ABLATION_PLAN.md §8). Only `train.seed` varies within an arm, and
+# only the setting under test varies between arms.
+#
+#   python -m s2g.scripts.train --config configs/variants/ablation/baseline.yaml \
+#       train.seed=0 graph.markers=rolling
+#
+# `tokenizer.max_source_length` / `max_target_length` are re-measured per arm with
+# `measure_lengths.py`; the values below are the baseline's.
+# =============================================================================
+
+wandb:
+  project: s2g-ablations
+  entity: null
+  run_name: ablation-baseline
+
+data:
+  data_dir: data/conll04
+  rel_schema: data/conll04/relation.schema
+  ent_schema: data/conll04/entity.schema
+  output_dir: outputs/ablation/baseline
+
+model:
+  name: google/flan-t5-base
+  pretrained_checkpoint: null
+  variant: re
+
+tokenizer:
+  max_source_length: 260
+  max_target_length: 210            # Re-measure per arm with `measure_lengths.py`
+
+prompt:
+  mode: budget
+  type: natural
+  style: direct                     # 'direct' | 'cot' (Axis 3, C2)
+  random_prompt: False
+
+graph:
+  markers: fixed                    # 'fixed' (A1) | 'rolling' (A2)
+  nesting: nr_type                  # 'nr_type' | 'r_type' (B3) | 'none' (B4)
+  joint_tail_type: False            # inline tail types for `joint` (B1 vs B2)
+  use_rejection: False              # True only for the CoT arm (C2)
+  random_graph: False
+  dedup: True                       # held constant across all 24 runs
+
+optimizer:
+  optim: adamw_torch
+  lr: 3.0e-4
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+scheduler:
+  type: constant_with_warmup
+  warmup_steps: 346                 # ~12% linear warmup across the 100-epoch run
+
+train:
+  max_steps: 2882                   # ~100 epochs over 922 sentences at effective batch 32
+  batch_size: 32
+  gradient_acc_steps: 1
+  gradient_clip_value: 1.0
+  gradient_checkpointing: False
+  precision: 'bf16'
+  seed: 0                           # Set per run; 3 seeds per arm
+  warm_start: False                 # Must stay False: the sentinels already carry
+                                    # pretrained embeddings, and warm-starting would
+                                    # overwrite them asymmetrically between arms.
+
+validation:
+  check_interval: 29                # Validate once per epoch
+  percent_check: 1.0
+  train_percent_check: 0.25
+  batch_size: 256
+  num_beams: 1
+  early_stopping_patience: 10
+  early_stopping_metric: strict_f1  # Matches the deciding metric
+
+generation:
+  num_beams: 3
+  constraint_decoding: False
+  length_penalty: null
+  early_stopping: null
+  no_repeat_ngram_size: null
+
+checkpoint:
+  save_top_k: 1
+  every_n_steps: 100000
+  resume_from: null
+
+callbacks:
+  sample_generation_interval: 290
+
+hardware:
+  num_workers: 4
+  persistent_workers: True
+  gpu_ids: [0]

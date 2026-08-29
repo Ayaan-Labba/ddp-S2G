@@ -36,6 +36,7 @@ class TokenizerConfig:
 class PromptConfig:
     mode: str = 'budget'
     type: str = 'natural'
+    style: str = 'direct'                 # 'direct' | 'cot'
     random_prompt: bool = False
     max_ent_types: Optional[int] = None   # null = use the full entity schema
     max_rel_types: Optional[int] = None   # null = use the full relation schema
@@ -54,7 +55,9 @@ class PromptConfig:
 class GraphConfig:
     random_graph: bool = False
     use_rejection: bool = False
-    use_nesting: bool = True
+    markers: str = 'fixed'                # 'fixed' | 'rolling'
+    nesting: str = 'nr_type'              # 'nr_type' | 'r_type' | 'none'
+    joint_tail_type: bool = False         # inline tail types for 'joint' ('re' always emits them)
     dedup: bool = True
 
 @dataclass

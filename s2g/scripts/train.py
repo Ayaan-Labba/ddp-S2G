@@ -103,7 +103,9 @@ def main() -> None:
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
 
     # Configure tokenizer and model with special tokens
-    tokens = S2GTokens(variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection)
+    tokens = S2GTokens(
+        variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection, markers=cfg.graph.markers
+    )
     warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
     add_special_tokens_to_tokenizer(tokenizer=tokenizer, tokens=tokens, model=model, warm_start=warm_start)
 
@@ -130,8 +132,11 @@ def main() -> None:
             'pos_max_end': getattr(cfg.prompt, 'pos_max_end'),
             'neg_max_start': getattr(cfg.prompt, 'neg_max_start'),
             'neg_max_end': getattr(cfg.prompt, 'neg_max_end'),
+            'prompt_style': cfg.prompt.style,
             'use_rejection': cfg.graph.use_rejection,
-            'use_nesting': cfg.graph.use_nesting,
+            'markers': cfg.graph.markers,
+            'nesting': cfg.graph.nesting,
+            'joint_tail_type': cfg.graph.joint_tail_type,
             'dedup': cfg.graph.dedup,
             'random_graph': cfg.graph.random_graph,
             'seed': cfg.train.seed,
@@ -233,13 +238,16 @@ def main() -> None:
         # standalone evaluation cannot silently score against a different format.
         (best_dir / "s2g_format.json").write_text(
             json.dumps({
-                'variant':        cfg.model.variant,
-                'prompt_type':    cfg.prompt.type,
-                'use_rejection':  cfg.graph.use_rejection,
-                'use_nesting':    cfg.graph.use_nesting,
-                'dedup':          cfg.graph.dedup,
-                'max_ent_types':  cfg.prompt.max_ent_types,
-                'max_rel_types':  cfg.prompt.max_rel_types,
+                'variant':         cfg.model.variant,
+                'prompt_type':     cfg.prompt.type,
+                'style':           cfg.prompt.style,
+                'use_rejection':   cfg.graph.use_rejection,
+                'markers':         cfg.graph.markers,
+                'nesting':         cfg.graph.nesting,
+                'joint_tail_type': cfg.graph.joint_tail_type,
+                'dedup':           cfg.graph.dedup,
+                'max_ent_types':   cfg.prompt.max_ent_types,
+                'max_rel_types':   cfg.prompt.max_rel_types,
             }, indent=2),
             encoding="utf-8",
         )

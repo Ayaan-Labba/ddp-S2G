@@ -92,7 +92,7 @@ prompt:
 graph:
   random_graph: false
   use_rejection: false
-  use_nesting: true
+  nesting: nr_type
 
 checkpoint:
   save_top_k: 1                # REBEL: save_top_k: 1

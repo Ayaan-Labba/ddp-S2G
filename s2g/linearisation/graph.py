@@ -1,21 +1,31 @@
 """
-Linearised graph construction and parsing (fixed-token branch).
+Linearised graph construction and parsing (ablation branch).
+
+Marker style (fixed / rolling), nesting mode and inline tail types are all
+emission-time settings; parsing is a single code path shared by every arm.
 """
 from __future__ import annotations
 
 import logging
 import random
 import re
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .special_tokens import S2GTokens, VALID_VARIANTS
+from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_MARKERS, VALID_VARIANTS
 
 logger = logging.getLogger(__name__)
 
 EntityBlock = Dict[str, Any]
 Triplet = Tuple[str, str, str]
 RejectedItem = str
+
+VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
+JOINT_VARIANTS: Set[str] = {'joint', 'boundary_joint'}
+TYPED_VARIANTS: Set[str] = {'joint', 're'}
+
+# All linearisation tokens are sentinels, so one pattern isolates every one of
+# them; which role a given sentinel plays is decided by identity, not by pattern.
+SENTINEL_PATTERN = re.compile(r'(<extra_id_\d+>)')
 
 
 def organise_filter_and_block(
@@ -44,7 +54,7 @@ def organise_filter_and_block(
 
     # 3. Select the entities that are entitled to a block: the joint variants emit
     # every entity, the RE variants only those heading at least one relation.
-    if variant in {'joint', 'boundary_joint'}:
+    if variant in JOINT_VARIANTS:
         block_ents = filtered_ents
     else:
         head_offsets = {tuple(r['head']['offset']) for r in filtered_rels}
@@ -97,11 +107,39 @@ def organise_filter_and_block(
     return blocks
 
 
+def max_emitted_blocks(markers: str, use_rejection: bool = False) -> Optional[int]:
+    """
+    Ceiling on emitted blocks, or ``None`` when uncapped.
+
+    Fixed markers reuse one token, so there is no ceiling. Rolling markers spend
+    one sentinel per block *after the first* — an n-block graph uses
+    ``<extra_id_0>`` .. ``<extra_id_{n-2}>`` — giving 95 blocks; rejection claims
+    one further index for its own marker, leaving 94.
+    """
+    if markers != 'rolling':
+        return None
+    return MAX_MARKER_SENTINELS if use_rejection else MAX_MARKER_SENTINELS + 1
+
+
+def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> Optional[str]:
+    """
+    Separator opening block ``block_idx``, or ``None`` for the first block.
+
+    The marker separates blocks rather than opening them, so a single-block graph
+    carries none and an n-block graph carries exactly n-1.
+    """
+    if block_idx <= 0:
+        return None
+    return tokens.token_strs['ent'] if markers == 'fixed' else tokens.sentinel_token(block_idx - 1)
+
+
 def build_graph(
         ent_blocks: List[EntityBlock],
         variant: str,
         tokens: S2GTokens,
-        use_nesting: bool = True,
+        nesting: str = 'nr_type',
+        markers: str = 'fixed',
+        joint_tail_type: bool = False,
         random_graph: bool = False,
         use_rejection: bool = False,
         rejected_ent_types: List[str] = None,
@@ -109,65 +147,78 @@ def build_graph(
     ) -> str:
     if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
-
-    parts = []
-    ent_token = tokens.token_strs['ent']
+    if nesting not in VALID_NESTING:
+        raise ValueError(f"Unknown nesting mode {nesting!r}; expected one of {VALID_NESTING}.")
+    if markers not in VALID_MARKERS:
+        raise ValueError(f"Unknown marker style {markers!r}; expected one of {VALID_MARKERS}.")
 
     if random_graph and ent_blocks:
         ent_blocks = random.sample(ent_blocks, len(ent_blocks))
 
-    if variant in {'joint', 'boundary_joint'}:
-        for ent in ent_blocks:
-            ent_toks = [ent_token, ent['text']]
-            if variant == 'joint' and ent.get('type'):
-                ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
+    # Pair each block with its relation order up front, so the ``none`` expansion
+    # below splits an already-ordered list rather than re-shuffling per block.
+    ordered: List[Tuple[EntityBlock, List[Dict[str, Any]]]] = []
+    for ent in ent_blocks:
+        rels = list(ent.get('relations') or [])
+        if random_graph and rels:
+            rels = random.sample(rels, len(rels))
+        ordered.append((ent, rels))
 
-            rels = ent.get('relations', [])
+    # Only emitted blocks consume a marker: the joint variants emit every entity,
+    # the RE variants only those heading at least one relation. Capping the
+    # candidate list instead would under-fill the RE targets, dropping heads that
+    # would have fitted once the relation-less entities were skipped.
+    emit = ordered if variant in JOINT_VARIANTS else [(e, r) for e, r in ordered if r]
+
+    if nesting == 'none':
+        # One relation per block: a k-relation head becomes k blocks with its
+        # mention and type repeated. Block *grouping* is untouched — this is an
+        # emission-time split, not a ``dedup`` change.
+        expanded: List[Tuple[EntityBlock, List[Dict[str, Any]]]] = []
+        for ent, rels in emit:
             if rels:
-                if random_graph:
-                    rels = random.sample(rels, len(rels))
-                for i, rel in enumerate(rels):
-                    rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
-                    tail_token = tokens.token_strs['tail']
-                    ent_toks.extend([rel_token, rel['type'], tail_token, rel['tail_text']])
+                expanded.extend((ent, [rel]) for rel in rels)
+            else:
+                expanded.append((ent, []))
+        emit = expanded
 
-            parts.append(" ".join(ent_toks))
+    cap = max_emitted_blocks(markers, use_rejection)
+    if cap is not None and len(emit) > cap:
+        logger.warning(
+            "Truncating %d entity blocks to %d: no rolling marker exists beyond <extra_id_%d>.",
+            len(emit), cap, cap - 2,
+        )
+        emit = emit[:cap]
 
-    elif variant in {'re', 'boundary_re'}:
-        for ent in ent_blocks:
-            rels = ent.get('relations', [])
-            if not rels:
-                continue
+    emits_ent_type = variant in TYPED_VARIANTS
+    emits_tail_type = variant == 're' or (variant == 'joint' and joint_tail_type)
 
-            ent_toks = [ent_token, ent['text']]
-            if variant == 're' and ent.get('type'):
-                ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
+    parts = []
+    for block_idx, (ent, rels) in enumerate(emit):
+        ent_toks = []
+        if (marker := marker_token(block_idx, tokens, markers)) is not None:
+            ent_toks.append(marker)
 
-            if random_graph:
-                rels = random.sample(rels, len(rels))
+        ent_toks.append(ent['text'])
+        if emits_ent_type and ent.get('type'):
+            ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
 
-            for i, rel in enumerate(rels):
-                rel_token = tokens.token_strs['r_type'] if (i == 0 or not use_nesting) else tokens.token_strs['nr_type']
-                tail_token = tokens.token_strs['tail']
-                tail_text = rel['tail_text']
-                tail_type = rel.get('tail_type') or ''
+        for i, rel in enumerate(rels):
+            rel_token = (
+                tokens.token_strs['nr_type'] if (nesting == 'nr_type' and i > 0)
+                else tokens.token_strs['r_type']
+            )
+            ent_toks.extend([rel_token, rel['type'], tokens.token_strs['tail'], rel['tail_text']])
+            if emits_tail_type and (tail_type := rel.get('tail_type')):
+                ent_toks.extend([tokens.token_strs['e_type'], tail_type])
 
-                if variant == 're':
-                    ent_toks.extend([
-                        rel_token, rel['type'],
-                        tail_token, tail_text,
-                        tokens.token_strs['e_type'], tail_type
-                    ])
-                else:
-                    ent_toks.extend([rel_token, rel['type'], tail_token, tail_text])
-
-            parts.append(" ".join(ent_toks))
+        parts.append(" ".join(ent_toks))
 
     if use_rejection:
         append_null_block(
             parts,
             tokens,
-            ent_types=(rejected_ent_types or []) if variant in {'joint', 're'} else [],
+            ent_types=(rejected_ent_types or []) if variant in TYPED_VARIANTS else [],
             rel_types=rejected_rel_types or [],
             random_graph=random_graph
         )
@@ -175,36 +226,34 @@ def build_graph(
     return " ".join(parts).strip()
 
 
-@lru_cache(maxsize=16)
-def get_compiled_special_token_pattern(tokens_tuple: Tuple[str, ...]) -> re.Pattern:
-    special_tokens = sorted(tokens_tuple, key=len, reverse=True)
-    alternation = "|".join(map(re.escape, special_tokens))
-    return re.compile(f"({alternation})")
-
-
 def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]:
     """
     State-machine parser for nested linearised target graphs.
 
+    Blocks are allocated by **append, in emission order**, in every arm: a rolling
+    marker's index is read as a separator and then discarded, which keeps the fixed
+    and rolling arms on one code path and makes a repeated index harmless.
+
     Parsing never deduplicates: every emitted block is retained, so repeated
     mentions and repeated relations survive into scoring exactly as generated.
     """
-    pattern = get_compiled_special_token_pattern(tuple(tok.all_tokens))
-    raw_tokens = [t.strip() for t in pattern.split(text) if t.strip()]
+    raw_tokens = [t.strip() for t in SENTINEL_PATTERN.split(text) if t.strip()]
 
-    ent_token = tok.token_strs['ent']
+    role_tokens = tok.role_token_strs
     e_type_token = tok.token_strs['e_type']
     r_type_token = tok.token_strs['r_type']
     nr_type_token = tok.token_strs['nr_type']
     tail_token = tok.token_strs['tail']
     null_token = tok.token_strs['null']
 
-    entities: List[EntityBlock] = []
+    # The first block carries no marker, so it is seeded here; it is dropped again
+    # at the end if it never received any text.
+    entities: List[EntityBlock] = [{'text': '', 'type': None, 'relations': []}]
     rejected: List[RejectedItem] = []
 
-    current_head_idx: Optional[int] = None
+    current_head_idx: Optional[int] = 0
     current_rel: Optional[Dict[str, Any]] = None
-    state: str = 'IDLE'
+    state: str = 'READ_ENT_TEXT'
 
     def flush_rel():
         nonlocal current_rel
@@ -217,11 +266,34 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
     while i < len(raw_tokens):
         token = raw_tokens[i]
 
-        if token == null_token:
-            flush_rel()
-            state = 'NULL'
-            i += 1
-            continue
+        # Role tokens are matched by exact identity before anything is treated as a
+        # separator, so a role sentinel can never be read as a marker.
+        if token in role_tokens:
+            if token == null_token:
+                flush_rel()
+                state = 'NULL'
+                i += 1
+                continue
+
+            if token == e_type_token:
+                if state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE'):
+                    state = 'READ_TAIL_TYPE'
+                else:
+                    state = 'READ_ENT_TYPE'
+                i += 1
+                continue
+
+            if token in (r_type_token, nr_type_token):
+                flush_rel()
+                state = 'READ_REL_TYPE'
+                current_rel = {'type': '', 'tail_text': '', 'tail_type': None}
+                i += 1
+                continue
+
+            if token == tail_token:
+                state = 'READ_TAIL_TEXT'
+                i += 1
+                continue
 
         if state == 'NULL':
             rejected.append(token)
@@ -229,33 +301,13 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
             i += 1
             continue
 
-        if token == ent_token:
-            # Every entity token opens a fresh block, so a repeated mention can
-            # never overwrite an earlier one.
+        if SENTINEL_PATTERN.fullmatch(token):
+            # Any remaining sentinel is a block separator. Its index is discarded:
+            # blocks are appended, so a repeated index cannot overwrite a block.
             flush_rel()
             entities.append({'text': '', 'type': None, 'relations': []})
             current_head_idx = len(entities) - 1
             state = 'READ_ENT_TEXT'
-            i += 1
-            continue
-
-        if token == e_type_token:
-            if state in ('READ_TAIL_TEXT', 'READ_TAIL_TYPE'):
-                state = 'READ_TAIL_TYPE'
-            else:
-                state = 'READ_ENT_TYPE'
-            i += 1
-            continue
-
-        if token in (r_type_token, nr_type_token):
-            flush_rel()
-            state = 'READ_REL_TYPE'
-            current_rel = {'type': '', 'tail_text': '', 'tail_type': None}
-            i += 1
-            continue
-
-        if token == tail_token:
-            state = 'READ_TAIL_TEXT'
             i += 1
             continue
 
@@ -289,10 +341,10 @@ def resolve_tail_entities(entities: List[EntityBlock]) -> List[EntityBlock]:
     """
     Reconcile relation tails against the entity blocks, in place.
 
-    A tail mention resolves to the *first* block carrying that text: the joint
-    variants never emit tail types inline, so the type has to be recovered from
-    the entity's own block, and duplicated mentions must resolve deterministically.
-    Tails with no block of their own are appended so they still count as entities.
+    A tail mention resolves to the *first* block carrying that text: without inline
+    tail types the type has to be recovered from the entity's own block, and
+    duplicated mentions must resolve deterministically. Tails with no block of
+    their own are appended so they still count as entities.
 
     Shared by ``parse_graph`` and gold-block construction so that both sides of a
     comparison are reconciled identically.
@@ -353,6 +405,13 @@ def append_null_block(
         rel_types: List[str],
         random_graph: bool
     ) -> None:
+    """
+    Per-type rejection markers, ``<null> type`` for each sampled negative.
+
+    Stage 3 replaces this with the single-marker CoT rejection tail; until then
+    rejection is only meaningful under fixed markers, where ``null`` is an active
+    role token.
+    """
     e_types = random.sample(ent_types, len(ent_types)) if random_graph else sorted(ent_types)
     r_types = random.sample(rel_types, len(rel_types)) if random_graph else sorted(rel_types)
     null_tok = tok.token_strs['null']
