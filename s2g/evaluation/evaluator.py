@@ -60,11 +60,17 @@ class S2GEvaluator:
         cleaned = self.clean_text(text)
         return parse_graph(cleaned, tok=self.tokens)
 
-    def build_gold(self, instance: Dict[str, Any]) -> Tuple[List[EntityBlock], Tuple]:
-        """Gold blocks and gold offset tuples for one preprocessed instance."""
+    def build_gold(self, instance: Dict[str, Any], with_offsets: bool = True) -> Tuple[List[EntityBlock], Optional[Tuple]]:
+        """
+        Gold blocks and gold offset tuples for one preprocessed instance.
+
+        ``with_offsets=False`` skips the offset bundle for callers that do not score
+        on offsets — validation during training — so neither the projection nor the
+        annotation read is paid for.
+        """
         return (
             build_gold_blocks(instance, self.variant, self.dedup),
-            build_gold_offsets(instance, self.variant),
+            build_gold_offsets(instance, self.variant) if with_offsets else None,
         )
 
     def process_batch_outputs(
@@ -130,6 +136,7 @@ class S2GEvaluator:
         all_gold_blocks: List[List[EntityBlock]],
         all_pred_offsets: Optional[List[Tuple]] = None,
         all_gold_offsets: Optional[List[Tuple]] = None,
+        include_macro: bool = True,
     ) -> Dict[str, float]:
         """Computes corpus-level micro and macro PRF metrics for the configured variant."""
         return compute_metrics_for_variant(
@@ -140,6 +147,7 @@ class S2GEvaluator:
             ent_schema=self.ent_schema,
             all_pred_offsets=all_pred_offsets,
             all_gold_offsets=all_gold_offsets,
+            include_macro=include_macro,
         )
 
     def run_evaluation(

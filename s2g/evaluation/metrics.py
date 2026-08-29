@@ -130,6 +130,7 @@ def score_bundles(
     rel_schema: Optional[List[str]] = None,
     ent_schema: Optional[List[str]] = None,
     prefix: str = "",
+    include_macro: bool = True,
 ) -> Dict[str, float]:
     """
     Scores per-instance ``(triplets, quintuples, entities, mentions)`` bundles.
@@ -137,6 +138,10 @@ def score_bundles(
     Text tuples and offset tuples share the same positional layout — the type sits
     at index 1 of a mention/triplet and index 2 of a quintuple — so the same
     scoring path serves both; only ``prefix`` differs ('' vs 'offset_').
+
+    ``include_macro=False`` drops the per-type macro averages, leaving only the
+    corpus-level micro PRF. Out-of-schema filtering is unaffected — that is part of
+    the scoring contract, not of macro reporting.
     """
     all_pred_triplets = [b[0] for b in pred_bundles]
     all_pred_quintuples = [b[1] for b in pred_bundles]
@@ -172,7 +177,8 @@ def score_bundles(
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_entity_mentions, all_gold_entity_mentions, f'{prefix}ner'))
-        m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, f"{prefix}ner"))
+        if include_macro:
+            m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, f"{prefix}ner"))
 
     # Relation boundary
     if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
@@ -180,7 +186,8 @@ def score_bundles(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_triplets, all_gold_triplets, f'{prefix}boundary'))
-        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
+        if include_macro:
+            m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
 
     # Relation strict
     if variant in {'re', 'joint'}:
@@ -188,7 +195,8 @@ def score_bundles(
             raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
         m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, f'{prefix}strict'))
-        m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, f"{prefix}strict"))
+        if include_macro:
+            m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, f"{prefix}strict"))
 
     return m
 
@@ -201,10 +209,15 @@ def compute_metrics_for_variant(
     ent_schema: Optional[List[str]] = None,
     all_pred_offsets: Optional[List[Tuple]] = None,
     all_gold_offsets: Optional[List[Tuple]] = None,
+    include_macro: bool = True,
 ) -> Dict[str, float]:
     """
     Text-based metrics for the variant, plus offset-based metrics (prefixed
     ``offset_``) when offset bundles are supplied.
+
+    Validation during training reports the micro text metrics only: the full set is
+    ~40 keys per evaluation, which swamps a W&B run without informing the training
+    signal. Pass offsets and ``include_macro=True`` for the end-of-run report.
     """
     if variant not in VALID_VARIANTS:
         raise ValueError(f"Unknown variant {variant!r}.")
@@ -213,11 +226,15 @@ def compute_metrics_for_variant(
     pred_bundles = [extract_from_blocks(p_block) for p_block in all_pred_blocks]
     gold_bundles = [extract_from_blocks(g_block) for g_block in all_gold_blocks]
 
-    m = score_bundles(variant, pred_bundles, gold_bundles, rel_schema, ent_schema, prefix="")
+    m = score_bundles(
+        variant, pred_bundles, gold_bundles, rel_schema, ent_schema,
+        prefix="", include_macro=include_macro,
+    )
 
     if all_pred_offsets is not None and all_gold_offsets is not None:
         m.update(score_bundles(
-            variant, all_pred_offsets, all_gold_offsets, rel_schema, ent_schema, prefix="offset_"
+            variant, all_pred_offsets, all_gold_offsets, rel_schema, ent_schema,
+            prefix="offset_", include_macro=include_macro,
         ))
 
     return m

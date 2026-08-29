@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -15,7 +15,6 @@ from transformers import EarlyStoppingCallback, Seq2SeqTrainer
 
 from s2g.linearisation import EntityBlock, VALID_VARIANTS
 from s2g.evaluation import S2GEvaluator
-from s2g.evaluation.offsets import project_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,9 @@ class S2GTrainer(Seq2SeqTrainer):
         self.scheduler_type     = kwargs.pop('scheduler_type', None)
         self.dedup              = kwargs.pop('dedup', True)
         self._s2g_gold_dataset  = None
+        # One persistent-worker loader per eval dataset, keyed by id(dataset) with
+        # the dataset held alongside so the id cannot be recycled.
+        self._s2g_eval_loaders: Dict[int, Tuple[Any, DataLoader]] = {}
 
         super().__init__(compute_metrics=self.compute_metrics_hf, **kwargs)
 
@@ -77,25 +79,45 @@ class S2GTrainer(Seq2SeqTrainer):
         pinned memory and prefetching are preserved.
 
         ``Trainer`` caches every non-string eval dataset under the single key
-        ``"eval"`` when ``dataloader_persistent_workers`` is set, so alternating
-        between the validation set and the train subset would otherwise silently
-        reuse whichever loader was built first. Drop the cache whenever the
-        requested dataset changes.
+        ``"eval"``, so with two eval datasets in play — the validation set and the
+        train subset, which ``evaluate`` visits back to back on every check — its
+        cache always holds the wrong one. Clearing that cache per call made the
+        loaders correct but rebuilt **both of them at every validation check**,
+        which defeats ``dataloader_persistent_workers`` entirely: a 100-check run
+        spawned several hundred short-lived worker generations instead of reusing
+        two sets.
+        Under the Python 3.14 ``forkserver`` default each of those spawns also
+        pickles the dataset, tokenizer and collator into every worker, so the churn
+        is paid in memory as well as in time.
+
+        The fix is a cache keyed by the dataset itself, so each eval dataset keeps
+        its own loader and its own persistent workers for the run's lifetime.
         """
         dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
         # ``compute_metrics_hf`` receives only tensors, so remember which dataset
         # this loop is about to iterate — that is where gold now comes from.
         self._s2g_gold_dataset = dataset
-        if getattr(self, '_s2g_eval_dataloader_key', None) is not dataset:
-            getattr(self, '_eval_dataloaders', {}).pop('eval', None)
-            self._s2g_eval_dataloader_key = dataset
+
+        persistent = getattr(self.args, 'dataloader_persistent_workers', False)
+        cached = self._s2g_eval_loaders.get(id(dataset))
+        if persistent and cached is not None and cached[0] is dataset:
+            return cached[1]
 
         train_collator = self.data_collator
         self.data_collator = train_collator.to_eval_mode()
         try:
-            return super().get_eval_dataloader(eval_dataset)
+            # Evict HF's single-key cache so it builds for *this* dataset rather
+            # than handing back the other one's loader.
+            getattr(self, '_eval_dataloaders', {}).pop('eval', None)
+            dataloader = super().get_eval_dataloader(eval_dataset)
         finally:
             self.data_collator = train_collator
+
+        if persistent:
+            # Hold the dataset alongside the loader: it keeps the object alive, so
+            # its id cannot be recycled by another dataset later in the run.
+            self._s2g_eval_loaders[id(dataset)] = (dataset, dataloader)
+        return dataloader
 
     def evaluate(self, eval_dataset: Any = None, **gen_kwargs: Any) -> Dict[str, float]:
         """
@@ -142,18 +164,14 @@ class S2GTrainer(Seq2SeqTrainer):
             labels = np.where(label_ids != -100, label_ids, tokenizer.pad_token_id)
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
             gold_blocks = [self.evaluator.parse_text(g)[0] for g in decoded_labels]
-            return self.evaluator.compute_final_metrics(pred_blocks, gold_blocks)
+            return self.evaluator.compute_final_metrics(pred_blocks, gold_blocks, include_macro=False)
 
-        gold_blocks, gold_offsets, pred_offsets = [], [], []
-        for inst, p_blocks in zip(instances, pred_blocks):
-            g_blocks, g_offsets = self.evaluator.build_gold(inst)
-            gold_blocks.append(g_blocks)
-            gold_offsets.append(g_offsets)
-            pred_offsets.append(project_blocks(p_blocks, inst.get('tokens', []))[0])
+        # Validation reports micro text metrics only. The full set is ~40 keys per
+        # check, which swamps a W&B run without adding any training signal; the
+        # offset and macro tracks are computed once, at end-of-run evaluation.
+        gold_blocks = [self.evaluator.build_gold(inst, with_offsets=False)[0] for inst in instances]
 
-        return self.evaluator.compute_final_metrics(
-            pred_blocks, gold_blocks, pred_offsets, gold_offsets
-        )
+        return self.evaluator.compute_final_metrics(pred_blocks, gold_blocks, include_macro=False)
 
     def gold_instances(self, num_preds: int) -> Optional[List[Dict[str, Any]]]:
         """

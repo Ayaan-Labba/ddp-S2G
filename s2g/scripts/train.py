@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import os
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import wandb
@@ -30,10 +32,61 @@ from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 logger = logging.getLogger(__name__)
 
 
+def configure_dataloader_start_method(method: Optional[str]) -> None:
+    """
+    Pin the multiprocessing start method used to launch DataLoader workers.
+
+    Defaults to ``None``: leave the interpreter's own choice alone, which is what
+    this pipeline has always done. That was ``fork`` before Python 3.14 and is
+    ``forkserver`` from 3.14 on.
+
+    The knob exists because the two differ in what a worker costs. Under
+    ``forkserver`` each worker is handed a *pickled* copy of the dataset, the
+    tokenizer and the collator over a pipe, instead of inheriting them
+    copy-on-write. That is cheap when the loaders are built once, and ruinous when
+    they are rebuilt repeatedly — see ``S2GTrainer.get_eval_dataloader``, where a
+    per-check rebuild once spawned several hundred worker generations and could
+    OOM-kill the parent partway through writing a payload, leaving the child to
+    report the half it received:
+
+        _pickle.UnpicklingError: pickle data was truncated
+
+    With the loaders cached, ``forkserver`` costs three spawns for a whole run and
+    the default needs no overriding. Set ``'fork'`` to avoid the per-worker copies
+    anyway (worth it for a large corpus, at the cost of a ``DeprecationWarning``
+    about forking a multi-threaded process), or ``'forkserver'`` / ``'spawn'`` to
+    pin one explicitly.
+    """
+    if not method:
+        return
+
+    available = multiprocessing.get_all_start_methods()
+    if method not in available:
+        logger.warning(
+            "Start method %r is unavailable on this platform (have %s); keeping %r.",
+            method, available, multiprocessing.get_start_method(),
+        )
+        return
+
+    if multiprocessing.get_start_method(allow_none=True) == method:
+        return
+
+    try:
+        multiprocessing.set_start_method(method, force=True)
+    except RuntimeError as exc:
+        logger.warning("Could not set the start method to %r: %s", method, exc)
+        return
+
+    logger.info("DataLoader worker start method set to %r.", method)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     cfg = load_config()
+
+    # Must happen before any DataLoader spins up workers.
+    configure_dataloader_start_method(cfg.hardware.dataloader_start_method)
 
     # Set cuda devices
     if cfg.hardware.gpu_ids is not None:
@@ -142,6 +195,17 @@ def main() -> None:
             'seed': cfg.train.seed,
         }
     )
+
+    # Validation emits micro text metrics only (see S2GTrainer.compute_metrics_hf),
+    # so selecting the best model on an offset or macro metric can no longer work.
+    best_metric = cfg.validation.early_stopping_metric
+    if best_metric.startswith(('offset_', 'macro_', 'eval_offset_', 'eval_macro_')):
+        raise ValueError(
+            f"validation.early_stopping_metric={best_metric!r} is not computed during "
+            "training: offset_* and macro_* metrics are reported only by the "
+            "end-of-run evaluation. Use a micro text metric such as 'strict_f1' or "
+            "'boundary_f1'."
+        )
 
     # Set up training callbacks
     callbacks = [

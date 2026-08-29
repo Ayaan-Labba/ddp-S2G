@@ -130,6 +130,10 @@ class HardwareConfig:
     num_workers: int = 0
     persistent_workers: bool = True
     gpu_ids: Optional[List[int]] = None
+    # DataLoader worker start method. null (the default) leaves the interpreter's
+    # own choice alone — 'fork' before Python 3.14, 'forkserver' from 3.14 on.
+    # Set explicitly only to override that.
+    dataloader_start_method: Optional[str] = None
 
 @dataclass
 class S2GConfig:

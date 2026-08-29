@@ -7,6 +7,7 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+from torch.utils.data import get_worker_info
 from transformers import PreTrainedTokenizerBase
 
 from s2g.linearisation import (
@@ -52,12 +53,16 @@ class S2GCollator:
         self.tok: S2GTokens = S2GTokens(
             self.variant, use_rejection=self.use_rejection, markers=self.markers
         )
-        self.rng = random.Random(config.get('seed', 0))
+        self.seed = int(config.get('seed', 0))
+        self._rng = random.Random(self.seed)
+        self._rng_worker: Optional[int] = None      # None = not yet bound to a process
 
         # Shared-memory counter: ``collate_fn`` runs inside DataLoader worker
-        # processes, which hold pickled copies of this object. A plain attribute
-        # written by the trainer would never reach them, freezing the bernoulli
-        # curriculum at step 0 for the whole run.
+        # processes, which hold copies of this object — inherited under ``fork``,
+        # pickled under ``forkserver`` / ``spawn``. A plain attribute written by the
+        # trainer would never reach them, freezing the bernoulli curriculum at step 0
+        # for the whole run. Shared memory survives both paths: fork inherits the
+        # mapping, and torch's pickle reduction passes the handle rather than a copy.
         self._step = torch.zeros(1, dtype=torch.long).share_memory_()
 
     @property
@@ -67,6 +72,32 @@ class S2GCollator:
     @current_step.setter
     def current_step(self, value: int) -> None:
         self._step.fill_(int(value))
+
+    def worker_seed(self, worker_id: int) -> int:
+        """Deterministic, distinct seed per (run seed, worker)."""
+        return (self.seed * 1_000_003 + (worker_id + 1) * 9_176_003) & 0xFFFF_FFFF
+
+    @property
+    def rng(self) -> random.Random:
+        """
+        The schema-sampling generator, bound to the process that uses it.
+
+        Each worker holds a *copy* of this collator, generator state included, so
+        without re-seeding every worker replays the identical stream and the sampled
+        schemas are perfectly correlated across them — verified to happen under both
+        ``fork`` and ``forkserver``. Rebinding on first use inside a worker gives
+        each one its own deterministic stream instead.
+
+        The seed depends only on ``(seed, worker_id)``, deliberately not on the step:
+        an eval collator must draw the same negatives at every validation check, or
+        the metrics would not be comparable across them.
+        """
+        info = get_worker_info()
+        worker_id = info.id if info is not None else -1
+        if worker_id != self._rng_worker:
+            self._rng = random.Random(self.worker_seed(worker_id))
+            self._rng_worker = worker_id
+        return self._rng
 
     def __call__(self, batch: List[Dict]) -> Dict[str, Any]:
         prepare_func = getattr(self, f"prepare_{self.variant}")
