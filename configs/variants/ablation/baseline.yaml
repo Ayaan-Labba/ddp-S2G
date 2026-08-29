@@ -91,6 +91,10 @@ generation:
 checkpoint:
   save_top_k: 1
   every_n_steps: null               # null / 0 = save on validation checks only
+  save_only_model: true             # 990 MB per checkpoint instead of 2.8 GB, and no
+                                    # ~2 GB host spike from serialising AdamW moments.
+                                    # Best-model selection still works; mid-run resume
+                                    # does not — irrelevant for a ~7 minute run.
   resume_from: null
 
 callbacks:

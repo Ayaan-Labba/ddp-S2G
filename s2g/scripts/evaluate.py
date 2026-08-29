@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 
-from s2g.data import S2GCollator, S2GDataset
+from s2g.data import S2GCollator, S2GDataset, set_parent_death_signal
 from s2g.evaluation import S2GEvaluator
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
 from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
@@ -121,6 +121,7 @@ def main() -> None:
         shuffle=False,
         num_workers=cfg.hardware.num_workers,
         collate_fn=eval_collator,
+        worker_init_fn=set_parent_death_signal,
     )
 
     evaluator = S2GEvaluator(

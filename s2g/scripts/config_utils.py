@@ -113,6 +113,11 @@ class EvaluationConfig:
 class CheckpointConfig:
     save_top_k: int = 3
     every_n_steps: Optional[int] = None   # null / 0 = save on validation checks only
+    # Write only the model, not the optimizer / scheduler / RNG state. For
+    # flan-t5-base that is 990 MB per checkpoint instead of 2.8 GB, and it drops the
+    # ~2 GB host-memory spike that gathering the AdamW moments causes at save time.
+    # `load_best_model_at_end` still works; resuming mid-run does not.
+    save_only_model: bool = False
     resume_from: Optional[str] = None
 
 @dataclass

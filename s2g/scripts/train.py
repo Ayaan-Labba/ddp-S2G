@@ -15,7 +15,7 @@ import wandb
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, Seq2SeqTrainingArguments, set_seed
-from s2g.data import S2GCollator, S2GDataset
+from s2g.data import S2GCollator, S2GDataset, set_parent_death_signal
 from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
 from s2g.training import (
     S2GTrainer,
@@ -108,10 +108,50 @@ def preload_forkserver_modules() -> None:
     logger.info("Preloading torch / transformers into the forkserver process.")
 
 
+def log_host_memory(required_gb: float = 4.0) -> None:
+    """
+    Report host memory before training, and warn when there is not enough of it.
+
+    A run needs roughly 3 GB of host RAM (torch and CUDA allocations, the model, and
+    the state-dict copy taken during each checkpoint save). When the box is already
+    full the kernel's OOM killer takes the process with no traceback — just
+    ``Killed``, usually mid-save because that is the next large allocation. Printing
+    the numbers up front turns that silence into something diagnosable.
+
+    A common cause of a mysteriously full box is orphaned DataLoader workers left
+    behind by an earlier run: SIGKILL runs no cleanup, so the workers are reparented
+    to init and keep their memory. ``pgrep -fc s2g.scripts.train`` counts them.
+    """
+    try:
+        meminfo = {}
+        with open('/proc/meminfo', encoding='utf-8') as f:
+            for line in f:
+                key, _, rest = line.partition(':')
+                meminfo[key] = int(rest.split()[0]) / 1024 ** 2      # kB -> GiB
+    except (OSError, ValueError, IndexError):
+        return                                                       # not Linux, or unreadable
+
+    total = meminfo.get('MemTotal')
+    available = meminfo.get('MemAvailable')
+    if total is None or available is None:
+        return
+
+    logger.info("Host memory: %.1f GiB total, %.1f GiB available.", total, available)
+    if available < required_gb:
+        logger.warning(
+            "Only %.1f GiB of host memory is available but a run needs roughly %.1f GiB. "
+            "Training will most likely be OOM-killed (a bare 'Killed', no traceback). "
+            "Check for orphaned workers from an earlier run: "
+            "`ps aux --sort=-rss | head -20`, `pgrep -fc s2g.scripts.train`.",
+            available, required_gb,
+        )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     cfg = load_config()
+    log_host_memory()
 
     # Must happen before any DataLoader spins up workers.
     configure_dataloader_start_method(cfg.hardware.dataloader_start_method)
@@ -236,6 +276,13 @@ def main() -> None:
             "'boundary_f1'."
         )
 
+    if cfg.checkpoint.save_only_model and cfg.checkpoint.resume_from:
+        logger.warning(
+            "checkpoint.save_only_model drops optimizer / scheduler / RNG state, so "
+            "resuming from %s will restart the optimizer rather than continue it.",
+            cfg.checkpoint.resume_from,
+        )
+
     # Set up training callbacks
     callbacks = [
         StepTrackingCallback(collator),
@@ -303,6 +350,7 @@ def main() -> None:
         save_strategy='steps',
         save_steps=cfg.validation.check_interval,
         save_total_limit=cfg.checkpoint.save_top_k + 1,
+        save_only_model=cfg.checkpoint.save_only_model,
         load_best_model_at_end=True,
         metric_for_best_model=cfg.validation.early_stopping_metric,
         greater_is_better=True,
@@ -379,6 +427,7 @@ def main() -> None:
             shuffle=False,
             num_workers=cfg.hardware.num_workers,
             collate_fn=eval_collator,
+            worker_init_fn=set_parent_death_signal,
         )
 
         constraint_decoding = getattr(cfg.generation, 'constraint_decoding', False)
@@ -409,6 +458,7 @@ def main() -> None:
                 shuffle=False,
                 num_workers=cfg.hardware.num_workers,
                 collate_fn=eval_collator,
+                worker_init_fn=set_parent_death_signal,
             )
 
             logger.info("Running post-training test evaluation...")

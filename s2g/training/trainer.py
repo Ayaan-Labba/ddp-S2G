@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from transformers import EarlyStoppingCallback, Seq2SeqTrainer
 
+from s2g.data import attach_parent_death_signal
 from s2g.linearisation import EntityBlock, VALID_VARIANTS
 from s2g.evaluation import S2GEvaluator
 
@@ -71,6 +72,10 @@ class S2GTrainer(Seq2SeqTrainer):
         else:
             super().create_scheduler(num_training_steps, optimizer)
 
+    def get_train_dataloader(self) -> DataLoader:
+        """Standard loader, with workers taught to die alongside the parent."""
+        return attach_parent_death_signal(super().get_train_dataloader())
+
     def get_eval_dataloader(self, eval_dataset: Optional[Any] = None) -> DataLoader:
         """
         Override evaluation dataloader to use budget-mode collation.
@@ -109,7 +114,7 @@ class S2GTrainer(Seq2SeqTrainer):
             # Evict HF's single-key cache so it builds for *this* dataset rather
             # than handing back the other one's loader.
             getattr(self, '_eval_dataloaders', {}).pop('eval', None)
-            dataloader = super().get_eval_dataloader(eval_dataset)
+            dataloader = attach_parent_death_signal(super().get_eval_dataloader(eval_dataset))
         finally:
             self.data_collator = train_collator
 
