@@ -112,25 +112,25 @@ def max_emitted_blocks(markers: str, use_rejection: bool = False) -> Optional[in
     Ceiling on emitted blocks, or ``None`` when uncapped.
 
     Fixed markers reuse one token, so there is no ceiling. Rolling markers spend
-    one sentinel per block *after the first* — an n-block graph uses
-    ``<extra_id_0>`` .. ``<extra_id_{n-2}>`` — giving 95 blocks; rejection claims
-    one further index for its own marker, leaving 94.
+    one sentinel per block, the first included — an n-block graph uses
+    ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — giving 94 blocks; rejection claims
+    one further index for its own marker, leaving 93.
     """
     if markers != 'rolling':
         return None
-    return MAX_MARKER_SENTINELS if use_rejection else MAX_MARKER_SENTINELS + 1
+    return MAX_MARKER_SENTINELS - 1 if use_rejection else MAX_MARKER_SENTINELS
 
 
-def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> Optional[str]:
+def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> str:
     """
-    Separator opening block ``block_idx``, or ``None`` for the first block.
+    Marker opening block ``block_idx``.
 
-    The marker separates blocks rather than opening them, so a single-block graph
-    carries none and an n-block graph carries exactly n-1.
+    Every block carries one, the first included: a single-block graph opens with a
+    marker and an n-block graph carries exactly n. Fixed markers reuse ``<ent>``
+    throughout; rolling markers count up from ``<extra_id_0>``, so block *i* is
+    opened by ``<extra_id_i>``.
     """
-    if block_idx <= 0:
-        return None
-    return tokens.token_strs['ent'] if markers == 'fixed' else tokens.sentinel_token(block_idx - 1)
+    return tokens.token_strs['ent'] if markers == 'fixed' else tokens.sentinel_token(block_idx)
 
 
 def build_graph(
@@ -186,7 +186,7 @@ def build_graph(
     if cap is not None and len(emit) > cap:
         logger.warning(
             "Truncating %d entity blocks to %d: no rolling marker exists beyond <extra_id_%d>.",
-            len(emit), cap, cap - 2,
+            len(emit), cap, cap - 1,
         )
         emit = emit[:cap]
 
@@ -195,11 +195,7 @@ def build_graph(
 
     parts = []
     for block_idx, (ent, rels) in enumerate(emit):
-        ent_toks = []
-        if (marker := marker_token(block_idx, tokens, markers)) is not None:
-            ent_toks.append(marker)
-
-        ent_toks.append(ent['text'])
+        ent_toks = [marker_token(block_idx, tokens, markers), ent['text']]
         if emits_ent_type and ent.get('type'):
             ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
 
@@ -246,8 +242,10 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
     tail_token = tok.token_strs['tail']
     null_token = tok.token_strs['null']
 
-    # The first block carries no marker, so it is seeded here; it is dropped again
-    # at the end if it never received any text.
+    # Seeded so that content appearing before any marker still lands somewhere —
+    # a malformed generation that omits the leading marker, or an earlier format in
+    # which the first block carried none. Dropped again at the end if it never
+    # received any text, which is the normal case now that every block is marked.
     entities: List[EntityBlock] = [{'text': '', 'type': None, 'relations': []}]
     rejected: List[RejectedItem] = []
 

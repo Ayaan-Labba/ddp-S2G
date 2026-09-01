@@ -36,7 +36,7 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Marke
                                                          ▼
                             ┌──────────────────────────────────────────────────────────┐
                             │             Decoder Output (Nested Graph)                │
-                            │  e1 <e_type> type <r_type> rel <tail> e2                 │
+                            │  <ent> e1 <e_type> type <r_type> rel <tail> e2           │
                             │  <ent> e2 <e_type> type                                  │
                             └────────────────────────────┬─────────────────────────────┘
                                                          │
@@ -52,11 +52,11 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Marke
 
 1. **Prompt**: The encoder prompt formats the input text with task instructions and target entity/relation schema types, e.g. `"Extract all entities from [...] and relations from [...] in the given text. Text: ..."`. The boundary variants drop the entity clause. Setting `prompt.type: false` disables the instruction and feeds the raw source text instead (ablation only).
 2. **Graph (Nested Scheme)**: Linearised target representation where each entity mention is co-located with its outgoing relations.
-   - Blocks are **separated**, not opened: the marker of the first block is omitted. A single-block graph carries no marker, an *n*-block graph carries exactly *n-1*, and an empty graph is the empty string.
+   - Every block is **opened** by a marker, the first included: a single-block graph carries one marker, an *n*-block graph carries exactly *n*, and an empty graph is the empty string.
    - The first relation is introduced by `<r_type> rel_type <tail> tail_text` (in `re`, also `<e_type> tail_type`).
    - Subsequent relations for the same head entity are introduced by `<nr_type> rel_type <tail> tail_text`.
    - Entities with **no outgoing relations** simply omit relation tokens (ending directly after entity mention/type).
-3. **Marker style (`graph.markers`)**: `fixed` reuses one token (`<ent>` = `<extra_id_94>`) for every separator; `rolling` counts upward from `<extra_id_0>`, so `<extra_id_0>` opens the *second* block and block *n* is opened by `<extra_id_{n-2}>`. The two differ **only** in the separator strings — they parse to identical blocks and score identically.
+3. **Marker style (`graph.markers`)**: `fixed` reuses one token (`<ent>` = `<extra_id_94>`) for every block; `rolling` counts upward from `<extra_id_0>`, so `<extra_id_0>` opens the *first* block and block *i* is opened by `<extra_id_i>`. The two differ **only** in the separator strings — they parse to identical blocks and score identically.
 4. **Vocabulary Special Tokens**: Every role token is a reserved sentinel already in the T5/Flan-T5 vocabulary, so `add_special_tokens` is skipped entirely and no resize occurs. Warm starting would overwrite pretrained sentinel embeddings, so it stays off (`train.warm_start: False`) for every ablation run.
 5. **Supported Model Variants**:
    * **`joint`**: Joint entity recognition and relation extraction. All entity mentions get their own block (`head [<e_type> type]`). Entities without outgoing relations emit no relation tokens. Tail types are emitted inline **iff `graph.joint_tail_type`**; otherwise they are recovered from the tail's own block.
@@ -92,11 +92,11 @@ The following running example demonstrates the exact encoder input prompts and d
   ```
 * **Decoder Output** (`joint_tail_type: false`, fixed markers):
   ```text
-  Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <e_type> city <r_type> located in <tail> United States <ent> United States <e_type> country
+  <ent> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <e_type> city <r_type> located in <tail> United States <ent> United States <e_type> country
   ```
 * **Decoder Output** (`joint_tail_type: true`):
   ```text
-  Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <ent> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country <ent> United States <e_type> country
+  <ent> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <ent> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country <ent> United States <e_type> country
   ```
 
 #### 2. `boundary_joint`
@@ -107,7 +107,7 @@ The following running example demonstrates the exact encoder input prompts and d
   ```
 * **Decoder Output (Nested Graph)**:
   ```text
-  Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <r_type> located in <tail> United States <ent> United States
+  <ent> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <r_type> located in <tail> United States <ent> United States
   ```
 
 #### 3. `re`
@@ -118,11 +118,11 @@ The following running example demonstrates the exact encoder input prompts and d
   ```
 * **Decoder Output (Nested Graph)** — the ablation baseline (A1):
   ```text
-  Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <ent> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
+  <ent> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <ent> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
   ```
-* **Under rolling markers** (A2) — identical but for the separator:
+* **Under rolling markers** (A2) — identical but for the markers:
   ```text
-  ... <e_type> country <extra_id_0> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
+  <extra_id_0> Barack Obama <e_type> person ... <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
   ```
 
 #### 4. `boundary_re`
@@ -133,7 +133,7 @@ The following running example demonstrates the exact encoder input prompts and d
   ```
 * **Decoder Output (Nested Graph)**:
   ```text
-  Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <r_type> located in <tail> United States
+  <ent> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <ent> Honolulu <r_type> located in <tail> United States
   ```
 
 ---
@@ -223,7 +223,7 @@ Keying on `(text, type)` rather than text alone is what keeps **homographs** —
 Constructs the linearised nested Graph target string.
 
 * **Which blocks are emitted**: `joint` / `boundary_joint` emit every entity; `re` / `boundary_re` emit only entities heading at least one relation. Selection happens *before* the cap, so a rolling target is never under-filled by relation-less entities that were going to be skipped anyway.
-* **The first marker is omitted.** A separator is emitted only for block index > 0: `<ent>` under fixed markers, `sentinel_token(i - 1)` under rolling, so `<extra_id_0>` opens the **second** block.
+* **Every block is marked, the first included.** `<ent>` under fixed markers, `sentinel_token(i)` under rolling, so `<extra_id_0>` opens the **first** block.
 * **`nesting`** (`'nr_type'` | `'r_type'` | `'none'`):
   | Value | Blocks per head | Relation token |
   |---|---|---|
@@ -234,17 +234,17 @@ Constructs the linearised nested Graph target string.
   > **Naming trap.** The retired `use_nesting=False` maps to `'r_type'`, **not** to `'none'` — the old flag only swapped the relation token, it never split the block. `'none'` is new behaviour, implemented by expanding blocks at emission time. Block *grouping* is untouched: `organise_filter_and_block` keeps merging mentions on `(text, type)` exactly as in the other arms, so `'none'` is not `dedup=False` and must not be implemented as such.
 
 * **Tail types**: `re` always emits `<e_type> tail_type`; `joint` emits it iff `joint_tail_type=True`; the boundary variants never do.
-* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block after the first, giving **95** blocks — **94** when `use_rejection` claims a further index. Excess blocks are truncated with a warning.
+* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block, giving **94** blocks — **93** when `use_rejection` claims a further index. Excess blocks are truncated with a warning.
 * **Rejection** (`use_rejection=True`) appends `<null> type` for every sampled negative, including when the graph is otherwise empty. Only meaningful under fixed markers; Stage 3 of the port replaces this with the single-marker CoT rejection tail.
 
-##### `marker_token(block_idx, tokens, markers) -> Optional[str]` and `max_emitted_blocks(markers, use_rejection) -> Optional[int]`
-The two helpers that carry the marker semantics: the separator for a given block index (`None` for the first), and the block ceiling (`None` when uncapped).
+##### `marker_token(block_idx, tokens, markers) -> str` and `max_emitted_blocks(markers, use_rejection) -> Optional[int]`
+The two helpers that carry the marker semantics: the marker opening a given block index, and the block ceiling (`None` when uncapped).
 
 ##### `parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]`
 * State-machine parser:
   1. Splits on `<extra_id_\d+>` — every linearisation token is a sentinel, so one pattern isolates them all.
   2. **Identity before pattern.** Role tokens are matched by exact string equality against `tok.role_token_strs` *first*; only a sentinel that is not an active role token is treated as a block separator. This is what keeps `<extra_id_95>` from ever being read as a marker, and what lets both marker arms share one code path.
-  3. **Seeds the first block**, since the first block carries no separator. The seed is dropped again if it never receives text.
+  3. **Seeds a first block**, so that content preceding any marker still lands somewhere — a malformed generation, or a target in the earlier format where the first block was unmarked. The seed is dropped if it never receives text, which is the normal case.
   4. Reads relations introduced by `<r_type>` / `<nr_type>`, and tail text/type after `<tail>`.
 * **Append, never index.** Any separator appends a new block; a rolling marker's index is read and then **discarded**. Both arms therefore allocate blocks identically, and a repeated or out-of-order index in a malformed generation is harmless rather than corrupting.
 * **Parsing never deduplicates, for any variant.** Every emitted block is retained, so repeated mentions and repeated relations survive into scoring exactly as generated. Deduplication is a *target construction* concern only (`graph.dedup`), never a parsing one.
@@ -602,12 +602,12 @@ The text track loses one relation and one entity outright: `(Bolshoi Ballet, org
 Suppose the model emits one correct relation, the entity it points at, and one hallucination:
 
 ```text
-Bolshoi Ballet <e_type> organization <r_type> organization based in <tail> Moscow
+<ent> Bolshoi Ballet <e_type> organization <r_type> organization based in <tail> Moscow
 <ent> Moscow <e_type> location
 <ent> Atlantis <e_type> location
 ```
 
-(Line-broken for readability; the target is one line. Note the first block carries no marker.)
+(Line-broken for readability; the target is one line.)
 
 #### Step 3 — projection onto offsets
 
@@ -766,6 +766,8 @@ Points worth knowing when writing a new variant config:
 ## 9. The CoNLL04 Ablation
 
 This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): both retire, and what distinguished them is now a config key. `ABLATION_PLAN.md` holds the study design, `PORTING_PLAN.md` the staged port.
+
+> **Format note.** `ABLATION_PLAN.md` §2 rule 1 specifies that the opening marker of the first block is omitted, and its §5 examples show that form. The emitted format now marks **every** block, the first included, following a verification run indicating that a leading marker trains better. The Axis-1 numbers were collected under the earlier form.
 
 **24 runs = 8 arms × 3 seeds**, greedy-sequential over three axes, decided on `strict_f1` (mean ± std over seeds; when two arms' intervals overlap, the incumbent is carried rather than the nominal winner). Each axis's winner is carried into the next, so no later result is unconditional — they hold only under the carried-over winners, and cross-axis interactions are not measured.
 
