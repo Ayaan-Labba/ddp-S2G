@@ -74,6 +74,16 @@ def main() -> None:
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
     prompt_style = fmt.get('style', cfg.prompt.style)
     tokens = S2GTokens(variant=variant, use_rejection=use_rejection, markers=markers)
+
+    # The role tokens live in the vocabulary, so a checkpoint scored under a
+    # different map would mis-parse every target rather than fail.
+    saved_token_strs = fmt.get('token_strs')
+    if saved_token_strs and dict(saved_token_strs) != dict(tokens.token_strs):
+        logger.warning(
+            "Token map mismatch: the checkpoint was trained with %s but this code "
+            "emits %s. Metrics will be meaningless until they agree.",
+            saved_token_strs, dict(tokens.token_strs),
+        )
     add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

@@ -8,7 +8,7 @@ This document provides a comprehensive, exhaustive technical reference for the *
 
 **S2G** frames joint entity and relation extraction (IE) as a sequence-to-sequence (Text-to-Text) translation problem built upon **Flan-T5** (Base/Large).
 
-By default, S2G uses natural language instruction prompts for the encoder input and generates a linearised token graph. **Every linearisation token is a reserved T5 sentinel**, so nothing is ever added to the vocabulary and no embedding resize is needed. The roles sit at the top of the range — `<extra_id_94>` (block marker), `<extra_id_95>` (entity type), `<extra_id_96>` (relation), `<extra_id_97>` (nested relation), `<extra_id_98>` (tail), `<extra_id_99>` (null) — leaving `<extra_id_0>` ... `<extra_id_93>` free for **rolling** block markers.
+By default, S2G uses natural language instruction prompts for the encoder input and generates a linearised token graph. Each role has its **own dedicated token** — `<ent>`, `<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>` — added to the tokenizer at load time. **Rolling** block markers are the exception: they stay on T5's reserved sentinels, and since the roles no longer occupy any of them the whole `<extra_id_0>` ... `<extra_id_99>` range is available.
 
 This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Marker style, nesting mode and inline tail types are **config settings**, not branches: it supersedes both `main` (fixed markers) and `sentinel` (rolling markers), which are retired. See §9.
 
@@ -52,12 +52,12 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Marke
 
 1. **Prompt**: The encoder prompt formats the input text with task instructions and target entity/relation schema types, e.g. `"Extract all entities from [...] and relations from [...] in the given text. Text: ..."`. The boundary variants drop the entity clause. Setting `prompt.type: false` disables the instruction and feeds the raw source text instead (ablation only).
 2. **Graph (Nested Scheme)**: Linearised target representation where each entity mention is co-located with its outgoing relations.
-   - Every block is **opened** by a marker, the first included: a single-block graph carries one marker, an *n*-block graph carries exactly *n*, and an empty graph is the empty string.
+   - Every block is **opened** by a marker, the first included. Under **rolling** markers the sequence is additionally **closed** by a terminal marker, so an *n*-block graph carries *n+1* markers and an empty graph is `<extra_id_0>` rather than the empty string. Under **fixed** markers there is no terminal marker: *n* markers, and an empty graph is the empty string.
    - The first relation is introduced by `<r_type> rel_type <tail> tail_text` (in `re`, also `<e_type> tail_type`).
    - Subsequent relations for the same head entity are introduced by `<nr_type> rel_type <tail> tail_text`.
    - Entities with **no outgoing relations** simply omit relation tokens (ending directly after entity mention/type).
-3. **Marker style (`graph.markers`)**: `fixed` reuses one token (`<ent>` = `<extra_id_94>`) for every block; `rolling` counts upward from `<extra_id_0>`, so `<extra_id_0>` opens the *first* block and block *i* is opened by `<extra_id_i>`. The two differ **only** in the separator strings — they parse to identical blocks and score identically.
-4. **Vocabulary Special Tokens**: Every role token is a reserved sentinel already in the T5/Flan-T5 vocabulary, so `add_special_tokens` is skipped entirely and no resize occurs. Warm starting would overwrite pretrained sentinel embeddings, so it stays off (`train.warm_start: False`) for every ablation run.
+3. **Marker style (`graph.markers`)**: `fixed` reuses the dedicated `<ent>` token for every block; `rolling` counts upward through the sentinels, so `<extra_id_0>` opens the *first* block, block *i* is opened by `<extra_id_i>`, and `<extra_id_n>` closes an *n*-block graph. The two arms are no longer structurally identical — rolling won Axis 1 and gained the terminal marker afterwards — but they still parse to identical blocks.
+4. **Vocabulary Special Tokens**: The role tokens are genuinely new vocabulary, so they are registered and the embedding matrix is resized (32100 → 32106 with all six active). Only the **active** set is added: a rolling run never registers `<ent>`, and a run without rejection never registers `<null>`. Their rows start random — `train.warm_start` stays `False` across the ablation to keep the held-constant list intact, so nothing initialises them.
 5. **Supported Model Variants**:
    * **`joint`**: Joint entity recognition and relation extraction. All entity mentions get their own block (`head [<e_type> type]`). Entities without outgoing relations emit no relation tokens. Tail types are emitted inline **iff `graph.joint_tail_type`**; otherwise they are recovered from the tail's own block.
    * **`boundary_joint`**: Joint entity span boundary extraction (no entity types) and relation extraction. All entity mentions get their own block (`head`). Entities without outgoing relations emit no relation tokens.
@@ -120,9 +120,9 @@ The following running example demonstrates the exact encoder input prompts and d
   ```text
   <ent> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <ent> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
   ```
-* **Under rolling markers** (A2) — identical but for the markers:
+* **Under rolling markers** (A2) — every block opened, and the sequence closed:
   ```text
-  <extra_id_0> Barack Obama <e_type> person ... <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
+  <extra_id_0> Barack Obama <e_type> person ... <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country <extra_id_2>
   ```
 
 #### 4. `boundary_re`
@@ -154,19 +154,19 @@ Defines the special token registry, marker-style handling, tokenizer integrity v
 * `VALID_VARIANTS`: `{'re', 'boundary_re', 'boundary_joint', 'joint'}`
 * `VALID_MARKERS`: `{'fixed', 'rolling'}`
 * `NUM_SENTINELS`: `100` — T5 ships exactly `<extra_id_0>` .. `<extra_id_99>`.
-* `MAX_MARKER_SENTINELS`: `94` — rolling markers occupy `<extra_id_0>` .. `<extra_id_93>`.
+* `MAX_MARKER_SENTINELS`: `100` — the whole range is free for rolling markers.
 
 #### Special Token Mapping (`S2GTokens.token_strs`)
-| Token Key | Sentinel | Semantic Role |
+| Token Key | Token | Semantic Role |
 |---|---|---|
-| `'ent'` | `<extra_id_94>` | Fixed block separator; **inactive under rolling markers** |
-| `'e_type'` | `<extra_id_95>` | Entity type token in Graph |
-| `'r_type'` | `<extra_id_96>` | Primary relation type token in Graph |
-| `'nr_type'` | `<extra_id_97>` | Nested relation type token (for same head entity) in Graph |
-| `'tail'` | `<extra_id_98>` | Static tail token preceding tail entity text |
-| `'null'` | `<extra_id_99>` | Rejection marker; **fixed markers only** |
+| `'ent'` | `<ent>` | Fixed block marker; **inactive under rolling markers** |
+| `'e_type'` | `<e_type>` | Entity type token in Graph |
+| `'r_type'` | `<r_type>` | Primary relation type token in Graph |
+| `'nr_type'` | `<nr_type>` | Nested relation type token (for same head entity) in Graph |
+| `'tail'` | `<tail>` | Static tail token preceding tail entity text |
+| `'null'` | `<null>` | Rejection marker; **fixed markers only** |
 
-> Roles sit at the *top* of the sentinel range so that the bottom stays free for rolling markers. Nothing is added to the vocabulary, so no checkpoint from an earlier token map is loadable — every ablation run is fresh, as intended.
+> Rolling block markers remain sentinels (`S2GTokens.sentinel_token(i)`), which is why the roles were moved off that range entirely. A checkpoint carries its map in `s2g_format.json`; scoring one under a different map would mis-parse every target rather than fail, so `evaluate.py` warns on a mismatch.
 
 #### Key Classes & Functions
 
@@ -174,19 +174,19 @@ Defines the special token registry, marker-style handling, tokenizer integrity v
 * **`base_tok_map`**: Maps active *role* tokens per variant. `'ent'` is deliberately absent — it is a marker, not a role.
 * **`self.active_tokens`**: Adds `'ent'` only when `markers == 'fixed'`, and `'null'` only when `markers == 'fixed'` **and** `use_rejection` — under rolling markers rejection is opened by the next sentinel in the sequence rather than by a dedicated token.
 * **`self.all_tokens`**: List of active sentinel strings.
-* **`self.role_token_strs`**: The active role tokens, excluding the marker. `parse_graph` tests these by exact identity *before* falling back to the sentinel pattern, so `<extra_id_95>` can never be read as a separator.
+* **`self.role_token_strs`**: The active role tokens, excluding the marker. `parse_graph` tests these by exact identity *before* treating anything as a marker, so a role token can never be read as a separator.
 * **`S2GTokens.sentinel_token(idx)`**: `<extra_id_{idx}>`, for rolling markers.
 
-##### `verify_sentinel_integrity(tokenizer) -> None`
-Raises `RuntimeError` unless all 100 `<extra_id_i>` are registered as special tokens and each encodes to exactly one id. This is the guard against the single most dangerous failure mode on this branch: `add_special_tokens({'additional_special_tokens': [...]})` can *replace* the tokenizer's list, deregistering the rolling-marker range and breaking **only** the rolling arm — silently, while the fixed arm keeps working.
+##### `verify_token_integrity(tokenizer, tokens=None) -> None`
+Raises `RuntimeError` unless every sentinel and every active token (a) encodes to exactly **one id** and (b) decodes back **verbatim** under `skip_special_tokens=False`. Those are the two properties the format actually depends on: a marker split across pieces breaks the rolling numbering, and a role token split across pieces is never matched by the parser.
 
-> Probed via `all_special_tokens`, which exists in both transformers 4 and 5; `additional_special_tokens` was removed in 5.x.
+> It asserts behaviour rather than membership of a registry, deliberately. `additional_special_tokens` was removed in transformers 5, and `all_special_tokens` silently drops the sentinels the moment new tokens are registered — while `added_tokens_decoder` keeps them flagged and both properties above continue to hold. Checking behaviour survives both quirks; checking a list did not.
 
 ##### `add_special_tokens_to_tokenizer(tokenizer, tokens: S2GTokens, model=None, warm_start: bool = True) -> int`
-* **Skips `add_special_tokens` entirely** when every token in `tokens.all_tokens` is already in the vocabulary — which, on this branch, is always. It returns `0`, so the resize / untie path never runs. That is intended.
-* If tokens *were* added (a non-T5 tokenizer), sets `tie_word_embeddings = False` and resizes.
-* If `warm_start=True`: initializes embeddings by averaging the input/output embeddings of role-appropriate phrases (`'ent'` -> `"entity: "`, `'e_type'` -> `"entity type: "`, ...). **Inert and required to stay off for the ablation**: the sentinels already carry pretrained embeddings, and warm-starting would overwrite them asymmetrically between the fixed and rolling arms.
-* Always calls `verify_sentinel_integrity` before returning.
+* Registers the tokens in `tokens.all_tokens` that are genuinely absent, so only the **active** set is added — no `<ent>` under rolling, no `<null>` without rejection. Re-running against a saved checkpoint adds nothing and leaves the embedding matrix alone.
+* When tokens were added, sets `tie_word_embeddings = False` and calls `resize_token_embeddings`.
+* If `warm_start=True`: initializes the new rows by averaging the input/output embeddings of role-appropriate phrases (`'ent'` -> `"entity: "`, `'e_type'` -> `"entity type: "`, ...). Held off across the ablation (`train.warm_start: False`), so the new tokens train from random initialisation.
+* Always calls `verify_token_integrity` before returning.
 
 ---
 
@@ -224,6 +224,7 @@ Constructs the linearised nested Graph target string.
 
 * **Which blocks are emitted**: `joint` / `boundary_joint` emit every entity; `re` / `boundary_re` emit only entities heading at least one relation. Selection happens *before* the cap, so a rolling target is never under-filled by relation-less entities that were going to be skipped anyway.
 * **Every block is marked, the first included.** `<ent>` under fixed markers, `sentinel_token(i)` under rolling, so `<extra_id_0>` opens the **first** block.
+* **Rolling graphs close with a terminal marker**, `sentinel_token(n)` for *n* emitted blocks. It is emitted even when there are no blocks, so an empty graph is `<extra_id_0>` — the rule the rejection tail already follows, and a less degenerate target than bare EOS. Stage 3 attaches the rejection tail to this same marker, so enabling rejection appends to the target rather than renumbering it. Fixed markers have no terminal marker.
 * **`nesting`** (`'nr_type'` | `'r_type'` | `'none'`):
   | Value | Blocks per head | Relation token |
   |---|---|---|
@@ -234,7 +235,7 @@ Constructs the linearised nested Graph target string.
   > **Naming trap.** The retired `use_nesting=False` maps to `'r_type'`, **not** to `'none'` — the old flag only swapped the relation token, it never split the block. `'none'` is new behaviour, implemented by expanding blocks at emission time. Block *grouping* is untouched: `organise_filter_and_block` keeps merging mentions on `(text, type)` exactly as in the other arms, so `'none'` is not `dedup=False` and must not be implemented as such.
 
 * **Tail types**: `re` always emits `<e_type> tail_type`; `joint` emits it iff `joint_tail_type=True`; the boundary variants never do.
-* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block, giving **94** blocks — **93** when `use_rejection` claims a further index. Excess blocks are truncated with a warning.
+* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block plus one for the terminal marker, so the full range of 100 allows **99** blocks; rejection costs nothing further, since its tail hangs off that terminal marker. Excess blocks are truncated with a warning.
 * **Rejection** (`use_rejection=True`) appends `<null> type` for every sampled negative, including when the graph is otherwise empty. Only meaningful under fixed markers; Stage 3 of the port replaces this with the single-marker CoT rejection tail.
 
 ##### `marker_token(block_idx, tokens, markers) -> str` and `max_emitted_blocks(markers, use_rejection) -> Optional[int]`
@@ -243,7 +244,7 @@ The two helpers that carry the marker semantics: the marker opening a given bloc
 ##### `parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]`
 * State-machine parser:
   1. Splits on `<extra_id_\d+>` — every linearisation token is a sentinel, so one pattern isolates them all.
-  2. **Identity before pattern.** Role tokens are matched by exact string equality against `tok.role_token_strs` *first*; only a sentinel that is not an active role token is treated as a block separator. This is what keeps `<extra_id_95>` from ever being read as a marker, and what lets both marker arms share one code path.
+  2. **Identity before pattern.** Role tokens are matched by exact string equality against `tok.role_token_strs` *first*; a token is treated as a block marker only if it is the fixed `<ent>` or matches the sentinel pattern. The split pattern itself is built from the token map (`split_pattern`, cached), since the tokens are no longer all of one shape.
   3. **Seeds a first block**, so that content preceding any marker still lands somewhere — a malformed generation, or a target in the earlier format where the first block was unmarked. The seed is dropped if it never receives text, which is the normal case.
   4. Reads relations introduced by `<r_type>` / `<nr_type>`, and tail text/type after `<tail>`.
 * **Append, never index.** Any separator appends a new block; a rolling marker's index is read and then **discarded**. Both arms therefore allocate blocks identically, and a repeated or out-of-order index in a malformed generation is harmless rather than corrupting.
@@ -698,7 +699,7 @@ Fine-tuning and pre-training share this entry point.
 5. Builds the collator, callbacks, `Seq2SeqTrainingArguments` and `S2GTrainer`, then trains.
 6. On rank 0: saves `best_model/` with `variant.txt` and `s2g_format.json`, then runs streaming evaluation on val and test and logs `final_val/*` / `final_test/*` to W&B.
 
-**`s2g_format.json`** persists every setting that changes how targets are linearised — `variant`, `prompt_type`, `style`, `use_rejection`, `markers`, `nesting`, `joint_tail_type`, `dedup`, `max_ent_types`, `max_rel_types` — so standalone evaluation cannot silently score against a different format. This matters more on this branch than it ever did: with eight arms in flight, scoring an arm's checkpoint under another arm's format is a live risk, not a hypothetical one.
+**`s2g_format.json`** persists every setting that changes how targets are linearised — `variant`, `prompt_type`, `style`, `use_rejection`, `markers`, `nesting`, `joint_tail_type`, `dedup`, `max_ent_types`, `max_rel_types`, `token_strs` — so standalone evaluation cannot silently score against a different format. This matters more on this branch than it ever did: with eight arms in flight, scoring an arm's checkpoint under another arm's format is a live risk, not a hypothetical one.
 
 ### 6.3. `evaluate.py`
 Standalone evaluation of a saved checkpoint. Reads `s2g_format.json` from the checkpoint directory and prefers it over the evaluation config for every format-critical setting — including `markers`, `nesting`, `joint_tail_type` and `style` — warning loudly when the sidecar is missing. The variant is resolved from the sidecar, then `variant.txt`, then the config. Collation is forced to budget mode via `to_eval_mode()`.
@@ -746,7 +747,7 @@ Points worth knowing when writing a new variant config:
 
 | Package / File | Primary Responsibility |
 |---|---|
-| `s2g.linearisation.special_tokens` | Sentinel role registry (`<extra_id_94>` .. `<extra_id_99>`), marker-style handling, tokenizer integrity verification. |
+| `s2g.linearisation.special_tokens` | Role token registry (`<ent>`, `<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>`), sentinel-backed rolling markers, marker-style handling, tokenizer integrity verification. |
 | `s2g.linearisation.graph` | Block building with `dedup` (`organise_filter_and_block`), graph construction with marker / nesting / tail-type settings (`build_graph`), state-machine parsing (`parse_graph`), tail reconciliation (`resolve_tail_entities`). |
 | `s2g.linearisation.prompt` | Single encoder-input builder (`build_instruction` / `build_encoder_input`) plus per-variant wrappers. |
 | `s2g.data.dataset` | Memory-mapped JSONL reader (`S2GDataset`) with a vectorised byte-offset index, picklable into DataLoader workers. |
@@ -767,7 +768,12 @@ Points worth knowing when writing a new variant config:
 
 This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): both retire, and what distinguished them is now a config key. `ABLATION_PLAN.md` holds the study design, `PORTING_PLAN.md` the staged port.
 
-> **Format note.** `ABLATION_PLAN.md` §2 rule 1 specifies that the opening marker of the first block is omitted, and its §5 examples show that form. The emitted format now marks **every** block, the first included, following a verification run indicating that a leading marker trains better. The Axis-1 numbers were collected under the earlier form.
+> **Format note.** `ABLATION_PLAN.md` §1 maps every role onto a reserved sentinel, and §2 rule 1 specifies that the opening marker of the first block is omitted; its §5 examples show that form. The emitted format has since moved three times — the roles now have dedicated tokens (rolling markers excepted), and:
+>
+> 1. **Every block is marked**, the first included — a leading marker trained better than omitting it.
+> 2. **Rolling graphs also close with a terminal marker** — rolling with a leading marker outperformed every earlier arm, and the terminal marker extends that.
+>
+> The Axis-1 numbers were collected under the original form. The fixed arm was left as it was, so the two marker styles are no longer structurally comparable; that only mattered while Axis 1 was open.
 
 **24 runs = 8 arms × 3 seeds**, greedy-sequential over three axes, decided on `strict_f1` (mean ± std over seeds; when two arms' intervals overlap, the incumbent is carried rather than the nominal winner). Each axis's winner is carried into the next, so no later result is unconditional — they hold only under the carried-over winners, and cross-axis interactions are not measured.
 

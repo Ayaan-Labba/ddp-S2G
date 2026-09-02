@@ -399,6 +399,9 @@ def main() -> None:
                 'nesting':         cfg.graph.nesting,
                 'joint_tail_type': cfg.graph.joint_tail_type,
                 'dedup':           cfg.graph.dedup,
+                # The role tokens are dedicated vocabulary now, so a checkpoint
+                # trained under one map cannot be scored under another.
+                'token_strs':      dict(tokens.token_strs),
                 'max_ent_types':   cfg.prompt.max_ent_types,
                 'max_rel_types':   cfg.prompt.max_rel_types,
             }, indent=2),

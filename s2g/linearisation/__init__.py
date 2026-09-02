@@ -2,7 +2,7 @@
 Public API for the S2G encoder/decoder format.
 """
 from .special_tokens import (
-    S2GTokens, add_special_tokens_to_tokenizer, get_token_ids, verify_sentinel_integrity,
+    S2GTokens, add_special_tokens_to_tokenizer, get_token_ids, verify_token_integrity,
     MAX_MARKER_SENTINELS, VALID_MARKERS, VALID_VARIANTS
 )
 from .prompt import (
@@ -16,7 +16,7 @@ from .graph import (
 )
 
 __all__ = [
-    'S2GTokens', 'add_special_tokens_to_tokenizer', 'get_token_ids', 'verify_sentinel_integrity',
+    'S2GTokens', 'add_special_tokens_to_tokenizer', 'get_token_ids', 'verify_token_integrity',
     'MAX_MARKER_SENTINELS', 'VALID_MARKERS', 'VALID_VARIANTS', 'VALID_NESTING',
     'build_boundary_joint_encoder_input', 'build_joint_encoder_input', 'build_re_encoder_input', 
     'build_boundary_re_encoder_input', 'build_encoder_input', 'build_instruction',

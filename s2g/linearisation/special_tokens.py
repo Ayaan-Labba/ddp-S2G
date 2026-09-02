@@ -1,9 +1,13 @@
 """
 Special token registry for the S2G model (ablation branch).
 
-Every linearisation role sits on a reserved T5 sentinel at the top of the range,
-so nothing is ever added to the vocabulary.  The bottom of the range
-(``<extra_id_0>`` .. ``<extra_id_93>``) is left free for rolling block markers.
+Each linearisation role has its own dedicated token, added to the tokenizer at
+load time.  Rolling block markers are the exception: they stay on T5's reserved
+sentinels, so the whole ``<extra_id_0>`` .. ``<extra_id_99>`` range is available
+to them.
+
+Only the *active* tokens are added, so a rolling run never pays for ``<ent>`` and
+a run without rejection never pays for ``<null>``.
 """
 from __future__ import annotations
 
@@ -15,20 +19,20 @@ ALL_TOKEN_NAMES: List[str] = ['ent', 'e_type', 'r_type', 'nr_type', 'tail', 'nul
 VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 VALID_MARKERS: Set = {'fixed', 'rolling'}
 
-# T5 / Flan-T5 ship exactly <extra_id_0> .. <extra_id_99>. The top six carry the
-# role tokens, leaving <extra_id_0> .. <extra_id_93> for rolling markers.
+# T5 / Flan-T5 ship exactly <extra_id_0> .. <extra_id_99>. The role tokens no
+# longer occupy any of them, so the entire range is free for rolling markers.
 NUM_SENTINELS = 100
-MAX_MARKER_SENTINELS = 94
+MAX_MARKER_SENTINELS = 100
 
 
 class S2GTokens:
     token_strs = {
-        'ent':      '<extra_id_94>',
-        'e_type':   '<extra_id_95>',
-        'r_type':   '<extra_id_96>',
-        'nr_type':  '<extra_id_97>',
-        'tail':     '<extra_id_98>',
-        'null':     '<extra_id_99>',
+        'ent':      '<ent>',
+        'e_type':   '<e_type>',
+        'r_type':   '<r_type>',
+        'nr_type':  '<nr_type>',
+        'tail':     '<tail>',
+        'null':     '<null>',
     }
 
     # ``ent`` is deliberately absent: it is a *marker*, not a role, and joins the
@@ -77,34 +81,48 @@ class S2GTokens:
         return f"<extra_id_{idx}>"
 
 
-def verify_sentinel_integrity(tokenizer: AutoTokenizer) -> None:
+def verify_token_integrity(tokenizer: AutoTokenizer, tokens: Optional[S2GTokens] = None) -> None:
     """
-    Assert that every ``<extra_id_i>`` survives tokenizer construction.
+    Assert that every token the format emits survives tokenisation intact.
 
-    ``add_special_tokens({'additional_special_tokens': [...]})`` can *replace* the
-    tokenizer's existing list, which would deregister the rolling-marker range and
-    break only the rolling arm — silently, and while the fixed arm keeps working.
+    The format needs exactly two properties from each of them, and asserts those
+    directly rather than checking membership of any registry:
 
-    Probed via ``all_special_tokens``, which exists across transformers 4 and 5;
-    ``additional_special_tokens`` was removed in 5.x.
+    1. it encodes to a **single id** — a marker split across pieces would break the
+       rolling numbering, and a role token split across pieces would never be
+       matched by the parser;
+    2. it decodes back **verbatim** under ``skip_special_tokens=False`` — the
+       evaluator parses the decoded generation, not the emitted string.
+
+    Membership lists are the wrong probe here. ``additional_special_tokens`` was
+    removed in transformers 5, and ``all_special_tokens`` drops the sentinels the
+    moment new tokens are added — while ``added_tokens_decoder`` keeps them flagged
+    and both properties above continue to hold. Checking behaviour survives both
+    quirks.
     """
-    registered = set(getattr(tokenizer, 'all_special_tokens', []) or [])
     unk_id = tokenizer.unk_token_id
-    missing, multi = [], []
+    checked = [S2GTokens.sentinel_token(i) for i in range(NUM_SENTINELS)]
+    if tokens is not None:
+        checked += list(tokens.all_tokens)
 
-    for idx in range(NUM_SENTINELS):
-        token = S2GTokens.sentinel_token(idx)
-        if token not in registered or tokenizer.convert_tokens_to_ids(token) == unk_id:
-            missing.append(token)
+    unknown, multi, mangled = [], [], []
+    for token in checked:
+        if tokenizer.convert_tokens_to_ids(token) == unk_id:
+            unknown.append(token)
             continue
-        if len(tokenizer.encode(token, add_special_tokens=False)) != 1:
-            multi.append(token)
 
-    if missing or multi:
+        ids = tokenizer.encode(token, add_special_tokens=False)
+        if len(ids) != 1:
+            multi.append(token)
+        elif tokenizer.decode(ids, skip_special_tokens=False).strip() != token:
+            mangled.append(token)
+
+    if unknown or multi or mangled:
+        trim = lambda xs: f"{xs[:5]}{'...' if len(xs) > 5 else ''}"
         raise RuntimeError(
-            "Sentinel integrity check failed — the linearisation format cannot be "
-            f"tokenised. Deregistered or unknown: {missing[:5]}{'...' if len(missing) > 5 else ''}; "
-            f"split into several ids: {multi[:5]}{'...' if len(multi) > 5 else ''}."
+            "Token integrity check failed — the linearisation format cannot survive "
+            f"a tokenizer round trip. Unknown: {trim(unknown)}; split into several "
+            f"ids: {trim(multi)}; did not decode back verbatim: {trim(mangled)}."
         )
 
 
@@ -114,10 +132,10 @@ def add_special_tokens_to_tokenizer(
         model: Optional[AutoModel] = None,
         warm_start: bool = True,
     ) -> int:
-    # Every linearisation token is a reserved sentinel, so it is already in the
-    # vocabulary and no registration is needed. Calling ``add_special_tokens``
-    # anyway would overwrite ``additional_special_tokens`` and drop the rolling
-    # marker range, so it runs only if something is genuinely absent.
+    # Only the *active* tokens are registered, so a rolling run never adds ``<ent>``
+    # and a run without rejection never adds ``<null>``. Re-running on a saved
+    # checkpoint is a no-op: nothing is missing, so nothing is added and the
+    # embedding matrix is left alone.
     missing = [t for t in tokens.all_tokens if tokenizer.convert_tokens_to_ids(t) == tokenizer.unk_token_id]
     num_added = tokenizer.add_special_tokens({'additional_special_tokens': tokens.all_tokens}) if missing else 0
 
@@ -127,9 +145,10 @@ def add_special_tokens_to_tokenizer(
             model.resize_token_embeddings(len(tokenizer))
 
         if warm_start:
-            # Inert while ``train.warm_start: False``, which every ablation run sets:
-            # the sentinels already carry pretrained embeddings, and overwriting them
-            # would do so asymmetrically between the fixed and rolling arms.
+            # The role tokens are new vocabulary, so their rows start random and this
+            # is the only thing that gives them a sensible prior. Held off anyway
+            # (``train.warm_start: False``) to keep the ablation's held-constant list
+            # intact — the arms then differ only in the format under test.
             token_init_phrases = {
                 'ent':      'entity: ',
                 'e_type':   'entity type: ',
@@ -163,7 +182,7 @@ def add_special_tokens_to_tokenizer(
                             except (IndexError, RuntimeError):
                                 out_emb[new_id].copy_(mean_in_emb)
 
-    verify_sentinel_integrity(tokenizer)
+    verify_token_integrity(tokenizer, tokens)
 
     return num_added
 

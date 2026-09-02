@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_MARKERS, VALID_VARIANTS
@@ -23,9 +24,28 @@ VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
 JOINT_VARIANTS: Set[str] = {'joint', 'boundary_joint'}
 TYPED_VARIANTS: Set[str] = {'joint', 're'}
 
-# All linearisation tokens are sentinels, so one pattern isolates every one of
-# them; which role a given sentinel plays is decided by identity, not by pattern.
-SENTINEL_PATTERN = re.compile(r'(<extra_id_\d+>)')
+# Rolling block markers are sentinels; every other linearisation token is
+# dedicated vocabulary. This matches markers only — role tokens are recognised by
+# identity, never by pattern.
+MARKER_PATTERN = re.compile(r'<extra_id_\d+>')
+
+
+@lru_cache(maxsize=16)
+def split_pattern(token_strs: Tuple[str, ...]) -> re.Pattern:
+    """
+    Pattern isolating every linearisation token during parsing.
+
+    Built from the token strings rather than hard-coded, because they are no longer
+    all of one shape: role tokens are dedicated vocabulary and markers are
+    sentinels. Longest-first alternation so that no token can be shadowed by
+    another that happens to be its prefix.
+
+    Deliberately given *all* the role tokens, not just the active ones. An inactive
+    token appearing in a generation is malformed either way, but isolating it keeps
+    it out of the entity text, where it would silently corrupt a mention.
+    """
+    alternation = "|".join(re.escape(t) for t in sorted(token_strs, key=len, reverse=True))
+    return re.compile(f"({alternation}|{MARKER_PATTERN.pattern})")
 
 
 def organise_filter_and_block(
@@ -112,13 +132,14 @@ def max_emitted_blocks(markers: str, use_rejection: bool = False) -> Optional[in
     Ceiling on emitted blocks, or ``None`` when uncapped.
 
     Fixed markers reuse one token, so there is no ceiling. Rolling markers spend
-    one sentinel per block, the first included — an n-block graph uses
-    ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — giving 94 blocks; rejection claims
-    one further index for its own marker, leaving 93.
+    one sentinel per block, the first included, plus one for the terminal marker —
+    an n-block graph uses ``<extra_id_0>`` .. ``<extra_id_n>`` — so the full range
+    of 100 sentinels allows 99 blocks. Rejection costs nothing further: its tail
+    hangs off that same terminal marker rather than claiming another.
     """
     if markers != 'rolling':
         return None
-    return MAX_MARKER_SENTINELS - 1 if use_rejection else MAX_MARKER_SENTINELS
+    return MAX_MARKER_SENTINELS - 1
 
 
 def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> str:
@@ -210,6 +231,16 @@ def build_graph(
 
         parts.append(" ".join(ent_toks))
 
+    if markers == 'rolling':
+        # Terminal marker closing the block sequence: an n-block graph opens its
+        # blocks with <extra_id_0> .. <extra_id_{n-1}> and closes with <extra_id_n>.
+        # Emitted even when there are no blocks at all, so an empty graph is
+        # `<extra_id_0>` rather than the empty string — the same rule the rejection
+        # tail follows, and a less degenerate target than bare EOS.
+        # Stage 3 folds the two together: this marker is where the rejection tail
+        # attaches, so adding rejection appends to it rather than renumbering.
+        parts.append(tokens.sentinel_token(len(emit)))
+
     if use_rejection:
         append_null_block(
             parts,
@@ -233,9 +264,11 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
     Parsing never deduplicates: every emitted block is retained, so repeated
     mentions and repeated relations survive into scoring exactly as generated.
     """
-    raw_tokens = [t.strip() for t in SENTINEL_PATTERN.split(text) if t.strip()]
+    pattern = split_pattern(tuple(tok.token_strs.values()))
+    raw_tokens = [t.strip() for t in pattern.split(text) if t.strip()]
 
     role_tokens = tok.role_token_strs
+    ent_token = tok.token_strs['ent']
     e_type_token = tok.token_strs['e_type']
     r_type_token = tok.token_strs['r_type']
     nr_type_token = tok.token_strs['nr_type']
@@ -299,9 +332,10 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
             i += 1
             continue
 
-        if SENTINEL_PATTERN.fullmatch(token):
-            # Any remaining sentinel is a block separator. Its index is discarded:
-            # blocks are appended, so a repeated index cannot overwrite a block.
+        if token == ent_token or MARKER_PATTERN.fullmatch(token):
+            # The fixed marker, or any rolling sentinel. A rolling index is read and
+            # then discarded: blocks are appended, so a repeated index cannot
+            # overwrite a block.
             flush_rel()
             entities.append({'text': '', 'type': None, 'relations': []})
             current_head_idx = len(entities) - 1
