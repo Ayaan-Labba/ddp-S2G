@@ -52,11 +52,11 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Marke
 
 1. **Prompt**: The encoder prompt formats the input text with task instructions and target entity/relation schema types, e.g. `"Extract all entities from [...] and relations from [...] in the given text. Text: ..."`. The boundary variants drop the entity clause. Setting `prompt.type: false` disables the instruction and feeds the raw source text instead (ablation only).
 2. **Graph (Nested Scheme)**: Linearised target representation where each entity mention is co-located with its outgoing relations.
-   - Every block is **opened** by a marker, the first included. Under **rolling** markers the sequence is additionally **closed** by a terminal marker, so an *n*-block graph carries *n+1* markers and an empty graph is `<extra_id_0>` rather than the empty string. Under **fixed** markers there is no terminal marker: *n* markers, and an empty graph is the empty string.
+   - Every block is **opened** by a marker, the first included, and nothing closes the sequence: an *n*-block graph carries exactly *n* markers in both arms, and an empty graph is the empty string.
    - The first relation is introduced by `<r_type> rel_type <tail> tail_text` (in `re`, also `<e_type> tail_type`).
    - Subsequent relations for the same head entity are introduced by `<nr_type> rel_type <tail> tail_text`.
    - Entities with **no outgoing relations** simply omit relation tokens (ending directly after entity mention/type).
-3. **Marker style (`graph.markers`)**: `fixed` reuses the dedicated `<ent>` token for every block; `rolling` counts upward through the sentinels, so `<extra_id_0>` opens the *first* block, block *i* is opened by `<extra_id_i>`, and `<extra_id_n>` closes an *n*-block graph. The two arms are no longer structurally identical — rolling won Axis 1 and gained the terminal marker afterwards — but they still parse to identical blocks.
+3. **Marker style (`graph.markers`)**: `fixed` reuses the dedicated `<ent>` token for every block; `rolling` counts upward through the sentinels, so `<extra_id_0>` opens the *first* block and block *i* is opened by `<extra_id_i>`. The two arms are structurally identical up to marker identity, and parse to identical blocks.
 4. **Vocabulary Special Tokens**: The role tokens are genuinely new vocabulary, so they are registered and the embedding matrix is resized (32100 → 32106 with all six active). Only the **active** set is added: a rolling run never registers `<ent>`, and a run without rejection never registers `<null>`. Their rows start random — `train.warm_start` stays `False` across the ablation to keep the held-constant list intact, so nothing initialises them.
 5. **Supported Model Variants**:
    * **`joint`**: Joint entity recognition and relation extraction. All entity mentions get their own block (`head [<e_type> type]`). Entities without outgoing relations emit no relation tokens. Tail types are emitted inline **iff `graph.joint_tail_type`**; otherwise they are recovered from the tail's own block.
@@ -224,7 +224,7 @@ Constructs the linearised nested Graph target string.
 
 * **Which blocks are emitted**: `joint` / `boundary_joint` emit every entity; `re` / `boundary_re` emit only entities heading at least one relation. Selection happens *before* the cap, so a rolling target is never under-filled by relation-less entities that were going to be skipped anyway.
 * **Every block is marked, the first included.** `<ent>` under fixed markers, `sentinel_token(i)` under rolling, so `<extra_id_0>` opens the **first** block.
-* **Rolling graphs close with a terminal marker**, `sentinel_token(n)` for *n* emitted blocks. It is emitted even when there are no blocks, so an empty graph is `<extra_id_0>` — the rule the rejection tail already follows, and a less degenerate target than bare EOS. Stage 3 attaches the rejection tail to this same marker, so enabling rejection appends to the target rather than renumbering it. Fixed markers have no terminal marker.
+* **Nothing closes the sequence.** A terminal rolling marker was tried and measured worse, with and without dedicated role tokens, so neither arm emits one: an *n*-block graph ends on the last block's content, and an empty graph is the empty string.
 * **`nesting`** (`'nr_type'` | `'r_type'` | `'none'`):
   | Value | Blocks per head | Relation token |
   |---|---|---|
@@ -235,7 +235,7 @@ Constructs the linearised nested Graph target string.
   > **Naming trap.** The retired `use_nesting=False` maps to `'r_type'`, **not** to `'none'` — the old flag only swapped the relation token, it never split the block. `'none'` is new behaviour, implemented by expanding blocks at emission time. Block *grouping* is untouched: `organise_filter_and_block` keeps merging mentions on `(text, type)` exactly as in the other arms, so `'none'` is not `dedup=False` and must not be implemented as such.
 
 * **Tail types**: `re` always emits `<e_type> tail_type`; `joint` emits it iff `joint_tail_type=True`; the boundary variants never do.
-* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block plus one for the terminal marker, so the full range of 100 allows **99** blocks; rejection costs nothing further, since its tail hangs off that terminal marker. Excess blocks are truncated with a warning.
+* **Cap**: fixed markers are uncapped (one token, reused). Rolling markers spend one sentinel per block, the first included, so the full range of 100 allows **100** blocks; rejection reserves one further index for its own marker (Stage 3), leaving **99**. Excess blocks are truncated with a warning.
 * **Rejection** (`use_rejection=True`) appends `<null> type` for every sampled negative, including when the graph is otherwise empty. Only meaningful under fixed markers; Stage 3 of the port replaces this with the single-marker CoT rejection tail.
 
 ##### `marker_token(block_idx, tokens, markers) -> str` and `max_emitted_blocks(markers, use_rejection) -> Optional[int]`
@@ -768,12 +768,13 @@ Points worth knowing when writing a new variant config:
 
 This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): both retire, and what distinguished them is now a config key. `ABLATION_PLAN.md` holds the study design, `PORTING_PLAN.md` the staged port.
 
-> **Format note.** `ABLATION_PLAN.md` §1 maps every role onto a reserved sentinel, and §2 rule 1 specifies that the opening marker of the first block is omitted; its §5 examples show that form. The emitted format has since moved three times — the roles now have dedicated tokens (rolling markers excepted), and:
+> **Format note.** `ABLATION_PLAN.md` §1 maps every role onto a reserved sentinel, and §2 rule 1 specifies that the opening marker of the first block is omitted; its §5 examples show that form. The emitted format has since moved in two respects — the roles now have dedicated tokens (rolling markers excepted), and:
 >
 > 1. **Every block is marked**, the first included — a leading marker trained better than omitting it.
-> 2. **Rolling graphs also close with a terminal marker** — rolling with a leading marker outperformed every earlier arm, and the terminal marker extends that.
 >
-> The Axis-1 numbers were collected under the original form. The fixed arm was left as it was, so the two marker styles are no longer structurally comparable; that only mattered while Axis 1 was open.
+> A further change was tried and reverted: closing the rolling sequence with a terminal `sentinel_token(n)` measured worse both with the roles on sentinels and with them on dedicated tokens, so neither arm emits one — the plan's form on that point.
+>
+> The Axis-1 numbers were collected under the original form.
 
 **24 runs = 8 arms × 3 seeds**, greedy-sequential over three axes, decided on `strict_f1` (mean ± std over seeds; when two arms' intervals overlap, the incumbent is carried rather than the nominal winner). Each axis's winner is carried into the next, so no later result is unconditional — they hold only under the carried-over winners, and cross-axis interactions are not measured.
 

@@ -132,14 +132,14 @@ def max_emitted_blocks(markers: str, use_rejection: bool = False) -> Optional[in
     Ceiling on emitted blocks, or ``None`` when uncapped.
 
     Fixed markers reuse one token, so there is no ceiling. Rolling markers spend
-    one sentinel per block, the first included, plus one for the terminal marker —
-    an n-block graph uses ``<extra_id_0>`` .. ``<extra_id_n>`` — so the full range
-    of 100 sentinels allows 99 blocks. Rejection costs nothing further: its tail
-    hangs off that same terminal marker rather than claiming another.
+    one sentinel per block, the first included — an n-block graph uses
+    ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — so the full range of 100 sentinels
+    allows 100 blocks. Rejection claims one further index for its own marker
+    (Stage 3), leaving 99.
     """
     if markers != 'rolling':
         return None
-    return MAX_MARKER_SENTINELS - 1
+    return MAX_MARKER_SENTINELS - 1 if use_rejection else MAX_MARKER_SENTINELS
 
 
 def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> str:
@@ -230,16 +230,6 @@ def build_graph(
                 ent_toks.extend([tokens.token_strs['e_type'], tail_type])
 
         parts.append(" ".join(ent_toks))
-
-    if markers == 'rolling':
-        # Terminal marker closing the block sequence: an n-block graph opens its
-        # blocks with <extra_id_0> .. <extra_id_{n-1}> and closes with <extra_id_n>.
-        # Emitted even when there are no blocks at all, so an empty graph is
-        # `<extra_id_0>` rather than the empty string — the same rule the rejection
-        # tail follows, and a less degenerate target than bare EOS.
-        # Stage 3 folds the two together: this marker is where the rejection tail
-        # attaches, so adding rejection appends to it rather than renumbering.
-        parts.append(tokens.sentinel_token(len(emit)))
 
     if use_rejection:
         append_null_block(
