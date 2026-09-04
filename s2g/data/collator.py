@@ -46,10 +46,13 @@ class S2GCollator:
         self.use_rejection = config.get('use_rejection', True)
         self.nesting = config.get('nesting', 'nr_type')
         self.joint_tail_type = config.get('joint_tail_type', False)
+        self.inline_none = config.get('inline_none', False)
         self.prompt_style = config.get('prompt_style', 'direct')
         self.dedup = config.get('dedup', True)
         self.prompt_type = config.get('prompt_type', 'natural')
-        self.tok: S2GTokens = S2GTokens(self.variant, use_rejection=self.use_rejection)
+        self.tok: S2GTokens = S2GTokens(
+            self.variant, use_rejection=self.use_rejection, inline_none=self.inline_none
+        )
         self.seed = int(config.get('seed', 0))
         self._rng = random.Random(self.seed)
         self._rng_worker: Optional[int] = None      # None = not yet bound to a process
@@ -126,7 +129,8 @@ class S2GCollator:
         dec = build_graph(
             blocks, 're', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, random_graph=self.random_graph, 
+            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
+            random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_ent_types=neg_ent, 
             rejected_rel_types=neg_rel
         )
@@ -147,7 +151,8 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'boundary_re', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, random_graph=self.random_graph, 
+            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
+            random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_rel_types=neg_rel
         )
         return enc, dec
@@ -167,7 +172,8 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, random_graph=self.random_graph, 
+            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
+            random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_rel_types=neg_rel
         )
         return enc, dec
@@ -190,7 +196,8 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'joint', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, random_graph=self.random_graph, 
+            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
+            random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_ent_types=neg_ent, 
             rejected_rel_types=neg_rel
         )

@@ -11,7 +11,9 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS
+from .special_tokens import (
+    JOINT_VARIANTS, MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,6 @@ Triplet = Tuple[str, str, str]
 RejectedItem = str
 
 VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
-JOINT_VARIANTS: Set[str] = {'joint', 'boundary_joint'}
 TYPED_VARIANTS: Set[str] = {'joint', 're'}
 
 # Every linearisation token is a sentinel, so one pattern isolates them all during
@@ -125,6 +126,7 @@ def build_graph(
         tokens: S2GTokens,
         nesting: str = 'nr_type',
         joint_tail_type: bool = False,
+        inline_none: bool = False,
         random_graph: bool = False,
         use_rejection: bool = False,
         rejected_ent_types: List[str] = None,
@@ -175,6 +177,9 @@ def build_graph(
 
     emits_ent_type = variant in TYPED_VARIANTS
     emits_tail_type = variant == 're' or (variant == 'joint' and joint_tail_type)
+    # Only the joint variants emit relation-less blocks at all, so the marker is a
+    # documented no-op elsewhere rather than something that silently never fires.
+    emits_no_rel = inline_none and variant in JOINT_VARIANTS
 
     parts = []
     for block_idx, (ent, rels) in enumerate(emit):
@@ -190,6 +195,11 @@ def build_graph(
             ent_toks.extend([rel_token, rel['type'], tokens.token_strs['tail'], rel['tail_text']])
             if emits_tail_type and (tail_type := rel.get('tail_type')):
                 ent_toks.extend([tokens.token_strs['e_type'], tail_type])
+
+        # Closes a block that heads nothing, stating the absence rather than leaving
+        # it to be inferred from the next marker arriving early.
+        if emits_no_rel and not rels:
+            ent_toks.append(tokens.token_strs['no_rel'])
 
         parts.append(" ".join(ent_toks))
 
@@ -224,6 +234,7 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
     nr_type_token = tok.token_strs['nr_type']
     tail_token = tok.token_strs['tail']
     null_token = tok.token_strs['null']
+    no_rel_token = tok.token_strs['no_rel']
 
     # Seeded so that content appearing before any marker still lands somewhere —
     # a malformed generation that omits the leading marker, or an earlier format in
@@ -273,6 +284,19 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
 
             if token == tail_token:
                 state = 'READ_TAIL_TEXT'
+                i += 1
+                continue
+
+            if token == no_rel_token:
+                # Carries no content: the block simply has no relations, which an
+                # empty list already says. The branch still earns its place. Without
+                # it the token falls through to the marker test below and — being a
+                # sentinel — opens a block; harmless on a well-formed target, where
+                # that block stays empty and is filtered out, but on a malformed
+                # generation any text following the marker would be credited as a
+                # hallucinated entity. IDLE drops it instead.
+                flush_rel()
+                state = 'IDLE'
                 i += 1
                 continue
 

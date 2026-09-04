@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Dict, Optional
 
 import torch
 from torch.utils.data import DataLoader
@@ -19,6 +20,36 @@ from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 from s2g.scripts.train import configure_dataloader_start_method, preload_forkserver_modules
 
 logger = logging.getLogger(__name__)
+
+
+def check_token_map(ckpt, saved: Optional[Dict[str, str]], tokens: S2GTokens) -> None:
+    """
+    Refuse a checkpoint whose token map disagrees with the one it would be scored
+    under. A mismatch mis-parses every target rather than failing, so there is no
+    setting here that could recover it.
+
+    Compared on **shared keys**, not whole maps: a role added to
+    ``ALL_TOKEN_NAMES`` since the checkpoint was written leaves the older roles on
+    their own sentinels, so the emitted format is unchanged and the checkpoint is
+    still scoreable. A role that is *active now* but absent from the saved map is a
+    real difference, and is rejected separately.
+    """
+    if not saved:
+        return
+
+    saved = dict(saved)
+    conflicts = {k: (saved[k], v) for k, v in tokens.token_strs.items() if k in saved and saved[k] != v}
+    absent = sorted(name for name in tokens.active_tokens if name not in saved)
+
+    if conflicts or absent:
+        raise RuntimeError(
+            f"Token map mismatch: {ckpt} was trained with {saved} but this code "
+            f"emits {dict(tokens.token_strs)}. "
+            f"Conflicting roles: {conflicts or 'none'}; "
+            f"active roles the checkpoint never carried: {absent or 'none'}. "
+            "Any metrics would be meaningless; score it with the revision it was "
+            "trained on."
+        )
 
 
 def main() -> None:
@@ -53,7 +84,7 @@ def main() -> None:
         logger.warning(
             "%s not found; falling back to the evaluation config. Verify that "
             "graph.use_rejection / graph.nesting / graph.joint_tail_type / "
-            "graph.dedup / prompt.type / prompt.style "
+            "graph.inline_none / graph.dedup / prompt.type / prompt.style "
             "match training.",
             fmt_file,
         )
@@ -69,20 +100,15 @@ def main() -> None:
     use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
     nesting = fmt.get('nesting', cfg.graph.nesting)
     joint_tail_type = fmt.get('joint_tail_type', cfg.graph.joint_tail_type)
+    inline_none = fmt.get('inline_none', cfg.graph.inline_none)
     dedup = fmt.get('dedup', cfg.graph.dedup)
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
     prompt_style = fmt.get('style', cfg.prompt.style)
-    tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
+    tokens = S2GTokens(
+        variant=variant, use_rejection=use_rejection, inline_none=inline_none
+    )
 
-    # A checkpoint trained under a different token map would mis-parse every target
-    # rather than fail, so refuse outright: no setting here can recover it.
-    saved_token_strs = fmt.get('token_strs')
-    if saved_token_strs and dict(saved_token_strs) != dict(tokens.token_strs):
-        raise RuntimeError(
-            f"Token map mismatch: {ckpt} was trained with {dict(saved_token_strs)} "
-            f"but this code emits {dict(tokens.token_strs)}. Any metrics would be "
-            "meaningless; score it with the revision it was trained on."
-        )
+    check_token_map(ckpt, fmt.get('token_strs'), tokens)
     verify_token_integrity(tokenizer)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -116,6 +142,7 @@ def main() -> None:
             'use_rejection': use_rejection,
             'nesting': nesting,
             'joint_tail_type': joint_tail_type,
+            'inline_none': inline_none,
             'dedup': dedup,
             'seed': cfg.train.seed,
         }

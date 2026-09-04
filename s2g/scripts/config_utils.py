@@ -57,6 +57,7 @@ class GraphConfig:
     use_rejection: bool = False
     nesting: str = 'nr_type'              # 'nr_type' | 'r_type' | 'none'
     joint_tail_type: bool = False         # inline tail types for 'joint' ('re' always emits them)
+    inline_none: bool = False             # close relation-less blocks with <no_rel> (joint variants only)
     dedup: bool = True
 
 @dataclass
