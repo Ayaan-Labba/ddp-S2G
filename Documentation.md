@@ -762,7 +762,7 @@ This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): 
 >
 > Checkpoints written while the dedicated tokens were in effect carry a `token_strs` sidecar naming them and an embedding matrix of 32104–32105 rows. They cannot be scored by this revision; `evaluate.py` raises rather than reporting meaningless numbers.
 
-**24 runs = 8 arms × 3 seeds**, greedy-sequential over three axes, decided on `strict_f1` (mean ± std over seeds; when two arms' intervals overlap, the incumbent is carried rather than the nominal winner). Each axis's winner is carried into the next, so no later result is unconditional — they hold only under the carried-over winners, and cross-axis interactions are not measured.
+**5 seeds per arm**, greedy-sequential over three axes, decided on test `strict_f1` (text track). A CoNLL04 run takes ~7 minutes, so seed count is not budget-constrained; the six arms remaining after Axis 1 are 30 runs. Each axis's winner is carried into the next, so no later result is unconditional — they hold only under the carried-over winners, and cross-axis interactions are not measured. The carried baseline is topped up to 5 seeds so every comparison is made at equal *n*.
 
 | Axis | Arm | Setting |
 |---|---|---|
@@ -774,13 +774,37 @@ This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): 
 | | B4 | `graph.nesting: none` |
 | 3 — Prompts | C1 | "Mark" wording (hand edit in `prompt.py`) |
 | | C2 | `prompt.style: cot`, `graph.use_rejection: true` *(Stage 3, not yet implemented)* |
+| | control | `prompt.style: direct`, `graph.use_rejection: true` — separates rejection from CoT |
 
 Stage 2a resolves as `winner(B1, B2)` vs the `re` baseline; Stage 2b runs B3 and B4 on that winner, with the carried `nr_type` run as the third reference point. Boundary variants are **not** ablated — they are complementary to the typed variants rather than comparable, so the boundary counterpart of the winning variant is adopted without a run.
 
-Held constant across all 24 runs: flan-t5-base, `max_steps=2882`, batch 32 × grad-acc 1, `lr=3e-4`, `constant_with_warmup`, `warmup_steps=346`, `check_interval=29`, `bf16`, `dedup: true`, `random_prompt: false`, `random_graph: false`, `num_beams=3` at test, `early_stopping_patience=10`, `early_stopping_metric: strict_f1`. Only `train.seed` varies within an arm; only the setting under test varies between arms. `max_source_length` / `max_target_length` are re-measured per arm with `measure_lengths.py` and recorded alongside its results.
+Held constant across every run: flan-t5-base, `max_steps=2882`, batch 32 × grad-acc 1, `lr=3e-4`, `weight_decay=0.01`, `constant_with_warmup`, `warmup_steps=346`, `check_interval=29`, `percent_check=1.0`, `train_percent_check=0.25`, `bf16`, `dedup: true`, `random_prompt: false`, `random_graph: false`, `early_stopping_patience=10`, `early_stopping_metric: strict_f1`, `save_top_k=1`, `save_only_model: true`, `checkpoint.every_n_steps: null`. Only `train.seed` varies within an arm; only the setting under test varies between arms.
+
+**`validation.num_beams` and `generation.num_beams` are both 3.** They previously differed (1 vs 3), which selected each best checkpoint under greedy decoding and reported it under beam search — selection noise in every arm for no benefit. Note that the beam-only knobs (`length_penalty`, `early_stopping`, `no_repeat_ngram_size`) are applied by `run_evaluation` but **not** on the HF validation path; all three are `null` in the baseline, so the two agree, and they must stay `null` or selection and reporting diverge again.
+
+**`scheduler.type` is frozen at `constant_with_warmup`.** Runs early-stop near step ~800, ~28% of `max_steps`, so a decaying schedule would make each arm's effective learning rate a function of when its own early stopping fired — entangling the schedule with how fast a given format converges. Changing it between axes invalidates every preceding carry.
+
+**`tokenizer.max_source_length` / `max_target_length`** are re-measured per arm with `measure_lengths.py` and recorded alongside its results. `nesting: none` and the CoT tail both lengthen targets materially; the baseline's 260/210 will not cover them.
+
+### Deciding a comparison
+
+For two arms of *n* seeds with per-seed std σ, a difference is significant at 95% above `t·σ·√(2/n)`:
+
+| σ (F1 pts) | n=5 threshold | n=10 threshold |
+|---|---|---|
+| 0.5 | 0.7 | 0.5 |
+| 1.0 | 1.5 | 0.9 |
+| 1.5 | 2.2 | 1.4 |
+| 2.0 | 2.9 | 1.9 |
+
+Detecting a true effect at 80% power takes ≈2.0σ at n=5, ≈1.3σ at n=10. Estimate σ from the data — Axis 1 gives a first pooled estimate — and if it lands above ~1.5 with an axis close, 10 seeds costs another ~35 minutes per arm.
+
+Because all arms score the same test instances, compare them **paired on instances** as well as through seed means: that cancels the test set's own sampling noise, which is identical across arms and should not be charged against a within-study comparison. `run_evaluation` already writes `parsed_pred_blocks` and `gold_blocks` per instance to `{split}_results.jsonl`, so per-instance strict TP / |pred| / |gold| can be recomputed offline with `extract_from_blocks` — no GPU cost and no change to the evaluator.
+
+**Carry the challenger only when the paired-bootstrap CI excludes 0 *and* the seed-mean gap clears the threshold above.** Otherwise carry the incumbent — baseline first, then the shorter/simpler format — and record a tie. Per arm, report the seed-mean ± std of test `strict_f1`, the individual seed values, the paired-bootstrap CI against the incumbent, and the carry decision. A tie is a reportable outcome; state the interval rather than a nominal winner the variance does not support.
 
 ### Caveats to carry into the writeup
 
 * **NER metrics are not comparable across the Stage-2a `re` vs `joint` comparison.** Gold differs between them by construction: `build_gold_offsets` restricts `re` / `boundary_re` gold to relation participants, while `joint` scores against every annotated entity. The relation tuples are identical, so `strict_f1` — the deciding metric — *is* comparable; but every `ner_*` and `offset_ner_*` figure moves for reasons that have nothing to do with the format under test. Report the NER numbers within a variant, never across that boundary.
 * **B1 vs B2 moves the homograph ceiling.** With inline tail types, `resolve_tail_entities` no longer has to guess a tail's type by first-occurrence surface match (§2.2). Part of any `strict_f1` shift is therefore a measurement artefact rather than a format effect. CoNLL04 has 0 affected cases, which bounds the size of this — but state it.
-* **C2 confounds CoT with rejection.** It is the only arm carrying `use_rejection`, so a CoT delta cannot be attributed to step-by-step framing alone. `prompt.style` and `graph.use_rejection` are orthogonal keys, so a *direct + rejection* control run is a single config flip if budget allows.
+* **C2 confounds CoT with rejection.** It is the only arm carrying `use_rejection`, so a CoT delta cannot be attributed to step-by-step framing alone. `prompt.style` and `graph.use_rejection` are orthogonal keys, so the *direct + rejection* control is a single config flip — 5 runs, ~35 minutes, and the only way to separate the two. Run it rather than caveating it.

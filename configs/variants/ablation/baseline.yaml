@@ -5,7 +5,7 @@
 # nesting · "Extract" wording · direct.
 #
 # Everything outside the `graph` and `prompt` blocks is held constant across all
-# 24 runs (see ABLATION_PLAN.md §8). Only `train.seed` varies within an arm, and
+# runs (see ABLATION_PLAN.md §8). Only `train.seed` varies within an arm, and
 # only the setting under test varies between arms.
 #
 #   python -m s2g.scripts.train --config configs/variants/ablation/baseline.yaml \
@@ -46,7 +46,7 @@ graph:
   joint_tail_type: False            # inline tail types for `joint` (B1 vs B2)
   use_rejection: False              # True only for the CoT arm (C2)
   random_graph: False
-  dedup: True                       # held constant across all 24 runs
+  dedup: True                       # held constant across every run
 
 optimizer:
   optim: adamw_torch
@@ -67,14 +67,16 @@ train:
   gradient_clip_value: 1.0
   gradient_checkpointing: False
   precision: 'bf16'
-  seed: 0                           # Set per run; 3 seeds per arm
+  seed: 0                           # Set per run; 5 seeds per arm (ABLATION_PLAN.md §9.1)
 
 validation:
   check_interval: 29                # Validate once per epoch
   percent_check: 1.0
   train_percent_check: 0.25
   batch_size: 256
-  num_beams: 1
+  num_beams: 3                      # Must match generation.num_beams: selecting the
+                                    # best checkpoint under greedy decoding and then
+                                    # reporting it under beam 3 is selection noise.
   early_stopping_patience: 10
   early_stopping_metric: strict_f1  # Matches the deciding metric
 
