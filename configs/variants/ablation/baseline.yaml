@@ -1,14 +1,15 @@
 # =============================================================================
 # S2G — CoNLL04 Ablation Baseline
 # =============================================================================
-# Axis 1 / A1: fixed markers · re · nr_type nesting · "Extract" wording · direct.
+# Axis 1 winner, carried into Axes 2 and 3: rolling markers · re · nr_type
+# nesting · "Extract" wording · direct.
 #
 # Everything outside the `graph` and `prompt` blocks is held constant across all
 # 24 runs (see ABLATION_PLAN.md §8). Only `train.seed` varies within an arm, and
 # only the setting under test varies between arms.
 #
 #   python -m s2g.scripts.train --config configs/variants/ablation/baseline.yaml \
-#       train.seed=0 graph.markers=rolling
+#       train.seed=0
 #
 # `tokenizer.max_source_length` / `max_target_length` are re-measured per arm with
 # `measure_lengths.py`; the values below are the baseline's.
@@ -41,7 +42,6 @@ prompt:
   random_prompt: False
 
 graph:
-  markers: fixed                    # 'fixed' (A1) | 'rolling' (A2)
   nesting: nr_type                  # 'nr_type' | 'r_type' (B3) | 'none' (B4)
   joint_tail_type: False            # inline tail types for `joint` (B1 vs B2)
   use_rejection: False              # True only for the CoT arm (C2)
@@ -68,9 +68,6 @@ train:
   gradient_checkpointing: False
   precision: 'bf16'
   seed: 0                           # Set per run; 3 seeds per arm
-  warm_start: False                 # Must stay False: the sentinels already carry
-                                    # pretrained embeddings, and warm-starting would
-                                    # overwrite them asymmetrically between arms.
 
 validation:
   check_interval: 29                # Validate once per epoch

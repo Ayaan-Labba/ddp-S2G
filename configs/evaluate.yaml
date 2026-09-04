@@ -33,7 +33,6 @@ validation:
 
 train:
   seed: 0
-  warm_start: true
 
 prompt:
   mode: budget

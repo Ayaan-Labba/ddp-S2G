@@ -1,18 +1,17 @@
 """
 Linearised graph construction and parsing (ablation branch).
 
-Marker style (fixed / rolling), nesting mode and inline tail types are all
-emission-time settings; parsing is a single code path shared by every arm.
+Nesting mode and inline tail types are emission-time settings; parsing is a
+single code path shared by every arm.
 """
 from __future__ import annotations
 
 import logging
 import random
 import re
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_MARKERS, VALID_VARIANTS
+from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS
 
 logger = logging.getLogger(__name__)
 
@@ -24,28 +23,9 @@ VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
 JOINT_VARIANTS: Set[str] = {'joint', 'boundary_joint'}
 TYPED_VARIANTS: Set[str] = {'joint', 're'}
 
-# Rolling block markers are sentinels; every other linearisation token is
-# dedicated vocabulary. This matches markers only — role tokens are recognised by
-# identity, never by pattern.
-MARKER_PATTERN = re.compile(r'<extra_id_\d+>')
-
-
-@lru_cache(maxsize=16)
-def split_pattern(token_strs: Tuple[str, ...]) -> re.Pattern:
-    """
-    Pattern isolating every linearisation token during parsing.
-
-    Built from the token strings rather than hard-coded, because they are no longer
-    all of one shape: role tokens are dedicated vocabulary and markers are
-    sentinels. Longest-first alternation so that no token can be shadowed by
-    another that happens to be its prefix.
-
-    Deliberately given *all* the role tokens, not just the active ones. An inactive
-    token appearing in a generation is malformed either way, but isolating it keeps
-    it out of the entity text, where it would silently corrupt a mention.
-    """
-    alternation = "|".join(re.escape(t) for t in sorted(token_strs, key=len, reverse=True))
-    return re.compile(f"({alternation}|{MARKER_PATTERN.pattern})")
+# Every linearisation token is a sentinel, so one pattern isolates them all during
+# parsing. Which of them are *roles* is decided by identity, never by pattern.
+SENTINEL_PATTERN = re.compile(r'(<extra_id_\d+>)')
 
 
 def organise_filter_and_block(
@@ -127,31 +107,16 @@ def organise_filter_and_block(
     return blocks
 
 
-def max_emitted_blocks(markers: str, use_rejection: bool = False) -> Optional[int]:
+def max_emitted_blocks(use_rejection: bool = False) -> int:
     """
-    Ceiling on emitted blocks, or ``None`` when uncapped.
+    Ceiling on emitted blocks.
 
-    Fixed markers reuse one token, so there is no ceiling. Rolling markers spend
-    one sentinel per block, the first included — an n-block graph uses
-    ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — so the full range of 100 sentinels
-    allows 100 blocks. Rejection claims one further index for its own marker
-    (Stage 3), leaving 99.
+    Markers spend one sentinel per block, the first included — an n-block graph
+    uses ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — so the 95 sentinels below the
+    roles allow 95 blocks. Rejection claims one further index for its own marker
+    (Stage 3), leaving 94.
     """
-    if markers != 'rolling':
-        return None
     return MAX_MARKER_SENTINELS - 1 if use_rejection else MAX_MARKER_SENTINELS
-
-
-def marker_token(block_idx: int, tokens: S2GTokens, markers: str) -> str:
-    """
-    Marker opening block ``block_idx``.
-
-    Every block carries one, the first included: a single-block graph opens with a
-    marker and an n-block graph carries exactly n. Fixed markers reuse ``<ent>``
-    throughout; rolling markers count up from ``<extra_id_0>``, so block *i* is
-    opened by ``<extra_id_i>``.
-    """
-    return tokens.token_strs['ent'] if markers == 'fixed' else tokens.sentinel_token(block_idx)
 
 
 def build_graph(
@@ -159,7 +124,6 @@ def build_graph(
         variant: str,
         tokens: S2GTokens,
         nesting: str = 'nr_type',
-        markers: str = 'fixed',
         joint_tail_type: bool = False,
         random_graph: bool = False,
         use_rejection: bool = False,
@@ -170,8 +134,6 @@ def build_graph(
         raise ValueError(f"Unknown variant {variant!r}.")
     if nesting not in VALID_NESTING:
         raise ValueError(f"Unknown nesting mode {nesting!r}; expected one of {VALID_NESTING}.")
-    if markers not in VALID_MARKERS:
-        raise ValueError(f"Unknown marker style {markers!r}; expected one of {VALID_MARKERS}.")
 
     if random_graph and ent_blocks:
         ent_blocks = random.sample(ent_blocks, len(ent_blocks))
@@ -203,10 +165,10 @@ def build_graph(
                 expanded.append((ent, []))
         emit = expanded
 
-    cap = max_emitted_blocks(markers, use_rejection)
-    if cap is not None and len(emit) > cap:
+    cap = max_emitted_blocks(use_rejection)
+    if len(emit) > cap:
         logger.warning(
-            "Truncating %d entity blocks to %d: no rolling marker exists beyond <extra_id_%d>.",
+            "Truncating %d entity blocks to %d: no block marker exists beyond <extra_id_%d>.",
             len(emit), cap, cap - 1,
         )
         emit = emit[:cap]
@@ -216,7 +178,7 @@ def build_graph(
 
     parts = []
     for block_idx, (ent, rels) in enumerate(emit):
-        ent_toks = [marker_token(block_idx, tokens, markers), ent['text']]
+        ent_toks = [tokens.sentinel_token(block_idx), ent['text']]
         if emits_ent_type and ent.get('type'):
             ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
 
@@ -247,18 +209,16 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
     """
     State-machine parser for nested linearised target graphs.
 
-    Blocks are allocated by **append, in emission order**, in every arm: a rolling
-    marker's index is read as a separator and then discarded, which keeps the fixed
-    and rolling arms on one code path and makes a repeated index harmless.
+    Blocks are allocated by **append, in emission order**: a marker's index is read
+    as a separator and then discarded, which makes a repeated or out-of-order index
+    harmless rather than destructive.
 
     Parsing never deduplicates: every emitted block is retained, so repeated
     mentions and repeated relations survive into scoring exactly as generated.
     """
-    pattern = split_pattern(tuple(tok.token_strs.values()))
-    raw_tokens = [t.strip() for t in pattern.split(text) if t.strip()]
+    raw_tokens = [t.strip() for t in SENTINEL_PATTERN.split(text) if t.strip()]
 
     role_tokens = tok.role_token_strs
-    ent_token = tok.token_strs['ent']
     e_type_token = tok.token_strs['e_type']
     r_type_token = tok.token_strs['r_type']
     nr_type_token = tok.token_strs['nr_type']
@@ -322,10 +282,10 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
             i += 1
             continue
 
-        if token == ent_token or MARKER_PATTERN.fullmatch(token):
-            # The fixed marker, or any rolling sentinel. A rolling index is read and
-            # then discarded: blocks are appended, so a repeated index cannot
-            # overwrite a block.
+        if SENTINEL_PATTERN.fullmatch(token):
+            # Any sentinel that is not an active role is a block marker. Its index is
+            # read and then discarded: blocks are appended, so a repeated index
+            # cannot overwrite a block.
             flush_rel()
             entities.append({'text': '', 'type': None, 'relations': []})
             current_head_idx = len(entities) - 1
@@ -430,9 +390,7 @@ def append_null_block(
     """
     Per-type rejection markers, ``<null> type`` for each sampled negative.
 
-    Stage 3 replaces this with the single-marker CoT rejection tail; until then
-    rejection is only meaningful under fixed markers, where ``null`` is an active
-    role token.
+    Stage 3 replaces this with the single-marker CoT rejection tail.
     """
     e_types = random.sample(ent_types, len(ent_types)) if random_graph else sorted(ent_types)
     r_types = random.sample(rel_types, len(rel_types)) if random_graph else sorted(rel_types)

@@ -16,7 +16,7 @@ import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from s2g.linearisation import (
-    S2GTokens, add_special_tokens_to_tokenizer,
+    S2GTokens, verify_token_integrity,
     build_boundary_joint_encoder_input, build_joint_encoder_input,
     build_re_encoder_input, build_boundary_re_encoder_input,
     extract_triplets, find_all_token_spans, parse_sel,
@@ -134,7 +134,7 @@ def main() -> None:
 
     use_rejection = "<extra_id_6>" in tokenizer.get_vocab()
     tokens = S2GTokens(model_variant, use_rejection=use_rejection)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm=False)
+    verify_token_integrity(tokenizer)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()

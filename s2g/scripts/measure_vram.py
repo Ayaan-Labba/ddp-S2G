@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, verify_token_integrity
 from s2g.scripts.config_utils import load_config
 
 logger = logging.getLogger(__name__)
@@ -285,9 +285,8 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
 
-    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection, markers=cfg.graph.markers)
-    warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=warm_start)
+    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection)
+    verify_token_integrity(tokenizer)
     model.to(device)
 
     variant = cfg.model.variant

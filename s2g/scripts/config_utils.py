@@ -55,7 +55,6 @@ class PromptConfig:
 class GraphConfig:
     random_graph: bool = False
     use_rejection: bool = False
-    markers: str = 'fixed'                # 'fixed' | 'rolling'
     nesting: str = 'nr_type'              # 'nr_type' | 'r_type' | 'none'
     joint_tail_type: bool = False         # inline tail types for 'joint' ('re' always emits them)
     dedup: bool = True
@@ -84,7 +83,6 @@ class TrainConfig:
     gradient_checkpointing: bool = False
     precision: str = 'bf16'
     seed: int = 0
-    warm_start: bool = False
 
 @dataclass
 class ValidationConfig:

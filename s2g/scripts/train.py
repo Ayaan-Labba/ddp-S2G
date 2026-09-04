@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, Seq2SeqTrainingArguments, set_seed
 from s2g.data import S2GCollator, S2GDataset, set_parent_death_signal
-from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, verify_token_integrity
 from s2g.training import (
     S2GTrainer,
     GenerateTextSamplesCallback,
@@ -224,12 +224,10 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model.pretrained_checkpoint or cfg.model.name)
 
-    # Configure tokenizer and model with special tokens
-    tokens = S2GTokens(
-        variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection, markers=cfg.graph.markers
-    )
-    warm_start = cfg.train.warm_start and (cfg.model.pretrained_checkpoint is None)
-    add_special_tokens_to_tokenizer(tokenizer=tokenizer, tokens=tokens, model=model, warm_start=warm_start)
+    # Every linearisation token is a reserved sentinel, so nothing is added to the
+    # vocabulary — only that the tokenizer still round-trips them is checked.
+    tokens = S2GTokens(variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection)
+    verify_token_integrity(tokenizer)
 
     # Set up S2G collator
     collator = S2GCollator(
@@ -256,7 +254,6 @@ def main() -> None:
             'neg_max_end': getattr(cfg.prompt, 'neg_max_end'),
             'prompt_style': cfg.prompt.style,
             'use_rejection': cfg.graph.use_rejection,
-            'markers': cfg.graph.markers,
             'nesting': cfg.graph.nesting,
             'joint_tail_type': cfg.graph.joint_tail_type,
             'dedup': cfg.graph.dedup,
@@ -395,12 +392,11 @@ def main() -> None:
                 'prompt_type':     cfg.prompt.type,
                 'style':           cfg.prompt.style,
                 'use_rejection':   cfg.graph.use_rejection,
-                'markers':         cfg.graph.markers,
                 'nesting':         cfg.graph.nesting,
                 'joint_tail_type': cfg.graph.joint_tail_type,
                 'dedup':           cfg.graph.dedup,
-                # The role tokens are dedicated vocabulary now, so a checkpoint
-                # trained under one map cannot be scored under another.
+                # A checkpoint trained under one token map cannot be scored under
+                # another; evaluate.py refuses to try.
                 'token_strs':      dict(tokens.token_strs),
                 'max_ent_types':   cfg.prompt.max_ent_types,
                 'max_rel_types':   cfg.prompt.max_rel_types,

@@ -53,7 +53,6 @@ train:
   gradient_checkpointing: false
   precision: bf16
   seed: 0
-  warm_start: true
 
 validation:
   check_interval: 500

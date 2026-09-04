@@ -14,7 +14,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 
 from s2g.data import S2GCollator, S2GDataset, set_parent_death_signal
 from s2g.evaluation import S2GEvaluator
-from s2g.linearisation import S2GTokens, add_special_tokens_to_tokenizer
+from s2g.linearisation import S2GTokens, verify_token_integrity
 from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 from s2g.scripts.train import configure_dataloader_start_method, preload_forkserver_modules
 
@@ -52,7 +52,7 @@ def main() -> None:
     else:
         logger.warning(
             "%s not found; falling back to the evaluation config. Verify that "
-            "graph.use_rejection / graph.markers / graph.nesting / graph.joint_tail_type / "
+            "graph.use_rejection / graph.nesting / graph.joint_tail_type / "
             "graph.dedup / prompt.type / prompt.style "
             "match training.",
             fmt_file,
@@ -67,24 +67,23 @@ def main() -> None:
     model = AutoModelForSeq2SeqLM.from_pretrained(ckpt)
 
     use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
-    markers = fmt.get('markers', cfg.graph.markers)
     nesting = fmt.get('nesting', cfg.graph.nesting)
     joint_tail_type = fmt.get('joint_tail_type', cfg.graph.joint_tail_type)
     dedup = fmt.get('dedup', cfg.graph.dedup)
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
     prompt_style = fmt.get('style', cfg.prompt.style)
-    tokens = S2GTokens(variant=variant, use_rejection=use_rejection, markers=markers)
+    tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
 
-    # The role tokens live in the vocabulary, so a checkpoint scored under a
-    # different map would mis-parse every target rather than fail.
+    # A checkpoint trained under a different token map would mis-parse every target
+    # rather than fail, so refuse outright: no setting here can recover it.
     saved_token_strs = fmt.get('token_strs')
     if saved_token_strs and dict(saved_token_strs) != dict(tokens.token_strs):
-        logger.warning(
-            "Token map mismatch: the checkpoint was trained with %s but this code "
-            "emits %s. Metrics will be meaningless until they agree.",
-            saved_token_strs, dict(tokens.token_strs),
+        raise RuntimeError(
+            f"Token map mismatch: {ckpt} was trained with {dict(saved_token_strs)} "
+            f"but this code emits {dict(tokens.token_strs)}. Any metrics would be "
+            "meaningless; score it with the revision it was trained on."
         )
-    add_special_tokens_to_tokenizer(tokenizer, tokens, model, warm_start=False)
+    verify_token_integrity(tokenizer)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device).eval()
@@ -115,7 +114,6 @@ def main() -> None:
             'random_prompt': cfg.prompt.random_prompt,
             'random_graph': cfg.graph.random_graph,
             'use_rejection': use_rejection,
-            'markers': markers,
             'nesting': nesting,
             'joint_tail_type': joint_tail_type,
             'dedup': dedup,

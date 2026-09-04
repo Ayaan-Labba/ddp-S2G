@@ -52,7 +52,6 @@ train:
   gradient_checkpointing: False      
   precision: 'bf16'
   seed: 0
-  warm_start: False
 
 validation:
   check_interval: 29               # Validate once per epoch

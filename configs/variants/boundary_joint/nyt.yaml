@@ -31,7 +31,6 @@ train:
   gradient_checkpointing: True
   precision: fp32
   seed: 0
-  warm_start: true
 
 validation:
   check_interval: 1750              

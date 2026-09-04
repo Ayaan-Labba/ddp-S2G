@@ -42,7 +42,6 @@ train:
   gradient_clip_value: 1.0
   precision: bf16                   # "fp16" / "bf16" / "fp32"
   seed: 0                           # Determines init, data shuffle, schema sampling
-  warm_start: true
 
 validation:
   check_interval: 6000              # Validate every N training steps
