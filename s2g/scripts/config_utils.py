@@ -25,7 +25,7 @@ class DataConfig:
 class ModelConfig:
     name: Optional[str] = "google/flan-t5-base"
     pretrained_checkpoint: Optional[str] = None
-    variant: str = 're'
+    variant: str = 'joint'
 
 @dataclass
 class TokenizerConfig:
@@ -56,8 +56,6 @@ class GraphConfig:
     random_graph: bool = False
     use_rejection: bool = False
     nesting: str = 'nr_type'              # 'nr_type' | 'r_type' | 'none'
-    joint_tail_type: bool = False         # inline tail types for 'joint' ('re' always emits them)
-    inline_none: bool = False             # close relation-less blocks with <no_rel> (joint variants only)
     dedup: bool = True
 
 @dataclass

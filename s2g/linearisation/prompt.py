@@ -1,7 +1,7 @@
 """
 Encoder input (prompt) construction for the S2G model.
 
-One builder serves every variant; the boundary variants simply drop the entity
+One builder serves both variants; ``boundary_joint`` simply drops the entity
 clause. The leading verb ("Extract" / "Mark") is an ablation arm edited by hand
 here — it is deliberately not a config key.
 """
@@ -53,18 +53,7 @@ def build_encoder_input(
     return f"{instruction} Text: {text}"
 
 
-# Per-variant wrappers. Signatures are unchanged from the branch's history so that
-# ``collator.py`` needs no edits here.
-
-def build_re_encoder_input(
-        ent_types: List[str],
-        rel_types: List[str],
-        text: str,
-        random_order: bool = False,
-        prompt: str = 'natural'
-    ) -> str:
-    return build_encoder_input(text, rel_types, ent_types, True, random_order, prompt)
-
+# Per-variant wrappers, kept so ``collator.py`` dispatches by name.
 
 def build_joint_encoder_input(
         ent_types: List[str],
@@ -74,15 +63,6 @@ def build_joint_encoder_input(
         prompt: str = 'natural'
     ) -> str:
     return build_encoder_input(text, rel_types, ent_types, True, random_order, prompt)
-
-
-def build_boundary_re_encoder_input(
-        rel_types: List[str],
-        text: str,
-        random_order: bool = False,
-        prompt: str = 'natural'
-    ) -> str:
-    return build_encoder_input(text, rel_types, None, False, random_order, prompt)
 
 
 def build_boundary_joint_encoder_input(

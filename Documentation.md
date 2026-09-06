@@ -10,7 +10,7 @@ This document provides a comprehensive, exhaustive technical reference for the *
 
 By default, S2G uses natural language instruction prompts for the encoder input and generates a linearised token graph. **Every linearisation token is a reserved T5 sentinel**, so nothing is ever added to the vocabulary and no embedding resize is needed. The roles take the top of the range — `<extra_id_95>` (entity type), `<extra_id_96>` (relation), `<extra_id_97>` (nested relation), `<extra_id_98>` (tail), `<extra_id_99>` (null) — and **block markers count up from `<extra_id_0>`**, one per block, through the 95 left below them.
 
-This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Nesting mode and inline tail types are **config settings**, not branches. Axis 1 chose rolling markers, and that format is now the only one the code emits — the fixed-marker arm that `main` carried is gone. See §9.
+This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Axes 1 and 2 are resolved, and their winners are the only format the code emits: rolling markers, the `joint` variant with inline tail types, and `<no_rel>` closing every relation-less block. The fixed-marker arm, the RE variants, and the switches that selected between them have all been removed. Nesting mode remains a config setting. See §9.
 
 > Examples throughout write the roles by their symbolic names (`<e_type>`, `<r_type>`, `<nr_type>`, `<tail>`, `<null>`) for readability; the emitted strings are the sentinels above. Block markers are shown as they are actually emitted, `<extra_id_0>` upward.
 
@@ -53,20 +53,21 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Nesti
 1. **Prompt**: The encoder prompt formats the input text with task instructions and target entity/relation schema types, e.g. `"Extract all entities from [...] and relations from [...] in the given text. Text: ..."`. The boundary variants drop the entity clause. Setting `prompt.type: false` disables the instruction and feeds the raw source text instead (ablation only).
 2. **Graph (Nested Scheme)**: Linearised target representation where each entity mention is co-located with its outgoing relations.
    - Every block is **opened** by a marker, the first included, and nothing closes the sequence: an *n*-block graph carries exactly *n* markers, and an empty graph is the empty string.
-   - The first relation is introduced by `<r_type> rel_type <tail> tail_text` (in `re`, also `<e_type> tail_type`).
+   - The first relation is introduced by `<r_type> rel_type <tail> tail_text` (in `joint`, also `<e_type> tail_type`).
    - Subsequent relations for the same head entity are introduced by `<nr_type> rel_type <tail> tail_text`.
-   - Entities with **no outgoing relations** simply omit relation tokens (ending directly after entity mention/type).
+   - Entities with **no outgoing relations** close on `<no_rel>` instead of relation tokens, stating the absence rather than leaving it to be inferred from the next marker arriving early.
 3. **Block markers**: rolling sentinels, counting upward — `<extra_id_0>` opens the *first* block and block *i* is opened by `<extra_id_i>`. Not configurable: Axis 1 measured this against a single reused marker and against a closed sequence, and this form won both.
 4. **Vocabulary Special Tokens**: There are none to add. Every role and every marker is a reserved sentinel already in the T5/Flan-T5 vocabulary, so the tokenizer is left exactly as it shipped (32100 rows), no resize occurs, and there is nothing to initialise. `verify_token_integrity` is the only tokenizer step, and it asserts rather than modifies.
-5. **Supported Model Variants**:
-   * **`joint`**: Joint entity recognition and relation extraction. All entity mentions get their own block (`head [<e_type> type]`). Entities without outgoing relations emit no relation tokens. Tail types are emitted inline **iff `graph.joint_tail_type`**; otherwise they are recovered from the tail's own block.
-   * **`boundary_joint`**: Joint entity span boundary extraction (no entity types) and relation extraction. All entity mentions get their own block (`head`). Entities without outgoing relations emit no relation tokens.
-   * **`re`**: Relation extraction with the entity *type* schema supplied in the prompt (entity spans are still predicted, not given). **Only entities that act as a head in at least one relation get their own block** (`head <e_type> head_type <r_type> rel <tail> tail <e_type> tail_type`). Non-participating and tail-only entities are omitted as head blocks. `re` **always** emits inline tail types — not configurable.
-   * **`boundary_re`**: Relation extraction between entity spans without entity types. **Only entities that act as a head in at least one relation get their own block** (`head <r_type> rel <tail> tail`). Non-participating and tail-only entities are omitted as head blocks.
+5. **Supported Model Variants**: two, both giving **every** entity its own block.
+   * **`joint`**: Joint entity recognition and relation extraction (`head <e_type> type`). Tail types are **always** emitted inline — Axis 2 chose that over recovering them from the tail's own block, and it is no longer a switch.
+   * **`boundary_joint`**: Joint entity span boundary extraction (no entity types) and relation extraction (`head`). Never emits types of any kind.
+
+   > The `re` and `boundary_re` variants, which gave a block only to relation heads, were retired when Axis 2 chose `joint`. Reproducing them requires an earlier revision.
 6. **Nesting (`graph.nesting`)**: How a head's 2nd+ relations are emitted — `nr_type` (one block per head, subsequent relations on `<nr_type>`), `r_type` (one block per head, every relation on `<r_type>`), or `none` (one relation per block, mention and type repeated). See §2.2.
-7. **Rejection & Null Blocks**: Optional negative schema type markers (`<null> type`) included in Graph outputs to force explicit model rejection of absent entity or relation types.
-8. **Deduplication (`graph.dedup`)**: Controls whether repeated mentions collapse when the *target* is built. Deduplication keys on `(text, type)`, so homographs are never merged. Parsing never deduplicates. Held constant at `True` across the ablation.
-9. **Dual scoring**: Every evaluation reports text-based metrics and offset-based metrics (`offset_` prefix) side by side. Gold comes from the preprocessed annotations, never from parsing the model's own target format.
+7. **Head rejection (`<no_rel>`)**: An entity that heads no relation closes its block with `<no_rel>`. Unconditional for both variants.
+8. **Schema rejection & Null Blocks**: Optional negative schema type markers (`<null> type`) included in Graph outputs to force explicit model rejection of absent entity or relation types. Distinct from `<no_rel>`, which is per-entity; this one is per schema type and gated on `graph.use_rejection` (Axis 3).
+9. **Deduplication (`graph.dedup`)**: Controls whether repeated mentions collapse when the *target* is built. Deduplication keys on `(text, type)`, so homographs are never merged. Parsing never deduplicates. Held constant at `True` across the ablation.
+10. **Dual scoring**: Every evaluation reports text-based metrics and offset-based metrics (`offset_` prefix) side by side. Gold comes from the preprocessed annotations, never from parsing the model's own target format.
 
 ---
 
@@ -90,14 +91,11 @@ The following running example demonstrates the exact encoder input prompts and d
   ```text
   Extract all entities from [artifact, city, country, organization, person] and relations from [founded, killed, located in, place of birth, president of] in the given text. Text: Barack Obama was born in Honolulu and served as the president of the United States
   ```
-* **Decoder Output** (`joint_tail_type: false`):
+* **Decoder Output** — the ablation baseline, carried out of Axes 1 and 2:
   ```text
-  <extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <extra_id_2> United States <e_type> country
+  <extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country <extra_id_2> United States <e_type> country <no_rel>
   ```
-* **Decoder Output** (`joint_tail_type: true`):
-  ```text
-  <extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country <extra_id_2> United States <e_type> country
-  ```
+  `United States` heads no relation, so its block closes on `<no_rel>`.
 
 #### 2. `boundary_joint`
 * **Task**: Joint entity span boundary extraction (without entity types) + relation extraction across all entities.
@@ -107,29 +105,7 @@ The following running example demonstrates the exact encoder input prompts and d
   ```
 * **Decoder Output (Nested Graph)**:
   ```text
-  <extra_id_0> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <r_type> located in <tail> United States <extra_id_2> United States
-  ```
-
-#### 3. `re`
-* **Task**: Relation extraction with entity types provided for head and tail entities. Non-head entities (e.g. `United States`) are omitted as head blocks.
-* **Encoder Input (Natural Prompt)**:
-  ```text
-  Extract all entities from [artifact, city, country, organization, person] and relations from [founded, killed, located in, place of birth, president of] in the given text. Text: Barack Obama was born in Honolulu and served as the president of the United States
-  ```
-* **Decoder Output (Nested Graph)** — the ablation baseline, carried out of Axis 1:
-  ```text
-  <extra_id_0> Barack Obama <e_type> person <r_type> place of birth <tail> Honolulu <e_type> city <nr_type> president of <tail> United States <e_type> country <extra_id_1> Honolulu <e_type> city <r_type> located in <tail> United States <e_type> country
-  ```
-
-#### 4. `boundary_re`
-* **Task**: Relation extraction between entity mentions without entity types. Non-head entities (e.g. `United States`) are omitted as head blocks.
-* **Encoder Input (Natural Prompt)**:
-  ```text
-  Extract all relations from [founded, killed, located in, place of birth, president of] in the given text. Text: Barack Obama was born in Honolulu and served as the president of the United States
-  ```
-* **Decoder Output (Nested Graph)**:
-  ```text
-  <extra_id_0> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <r_type> located in <tail> United States
+  <extra_id_0> Barack Obama <r_type> place of birth <tail> Honolulu <nr_type> president of <tail> United States <extra_id_1> Honolulu <r_type> located in <tail> United States <extra_id_2> United States <no_rel>
   ```
 
 ---
@@ -147,7 +123,7 @@ Defines the special token registry and tokenizer integrity verification. Nothing
 
 #### Constants & Token Map
 * `ALL_TOKEN_NAMES`: `['e_type', 'r_type', 'nr_type', 'tail', 'null']`
-* `VALID_VARIANTS`: `{'re', 'boundary_re', 'boundary_joint', 'joint'}`
+* `VALID_VARIANTS`: `{'joint', 'boundary_joint'}`
 * `NUM_SENTINELS`: `100` — T5 ships exactly `<extra_id_0>` .. `<extra_id_99>`.
 * `MAX_MARKER_SENTINELS`: `NUM_SENTINELS - len(ALL_TOKEN_NAMES)` = `95` — the indices below the roles, all of them available to block markers.
 
@@ -195,7 +171,7 @@ Handles nested graph building (each entity mention co-located with its outgoing 
 Turns raw instance annotations into the block list that `build_graph` linearises.
 
 1. Filters entities to `allowed_ent_types` (skipped when `use_types=False`) and relations to `allowed_rel_types` whose head **and** tail survived; sorts both by offset.
-2. Selects which entities are entitled to a block — `joint` / `boundary_joint` emit every entity, `re` / `boundary_re` only those heading at least one relation.
+2. Gives every surviving entity a block, relation-less ones included.
 3. Builds the blocks, governed by `dedup`.
 4. Attaches each relation to its head block.
 
@@ -208,10 +184,10 @@ Turns raw instance annotations into the block list that `build_graph` linearises
 
 Keying on `(text, type)` rather than text alone is what keeps **homographs** — `Washington` the person versus `Washington` the location — as separate blocks. Boundary variants carry `type=None`, so their key degenerates to text, as intended.
 
-##### `build_graph(ent_blocks, variant, tokens, nesting='nr_type', joint_tail_type=False, random_graph=False, use_rejection=False, rejected_ent_types=None, rejected_rel_types=None) -> str`
+##### `build_graph(ent_blocks, variant, tokens, nesting='nr_type', random_graph=False, use_rejection=False, rejected_ent_types=None, rejected_rel_types=None) -> str`
 Constructs the linearised nested Graph target string.
 
-* **Which blocks are emitted**: `joint` / `boundary_joint` emit every entity; `re` / `boundary_re` emit only entities heading at least one relation. Selection happens *before* the cap, so a target is never under-filled by relation-less entities that were going to be skipped anyway.
+* **Which blocks are emitted**: every entity, relation-less ones included. The head-only selection the RE variants used is gone with them, so the cap now applies to the full entity list.
 * **Every block is marked, the first included.** `sentinel_token(i)` opens block *i*, so `<extra_id_0>` opens the **first** block.
 * **Nothing closes the sequence.** A terminal marker was tried and measured worse, with the roles on sentinels and with them on dedicated tokens, so none is emitted: an *n*-block graph ends on the last block's content, and an empty graph is the empty string.
 * **`nesting`** (`'nr_type'` | `'r_type'` | `'none'`):
@@ -223,7 +199,8 @@ Constructs the linearised nested Graph target string.
 
   > **Naming trap.** The retired `use_nesting=False` maps to `'r_type'`, **not** to `'none'` — the old flag only swapped the relation token, it never split the block. `'none'` is new behaviour, implemented by expanding blocks at emission time. Block *grouping* is untouched: `organise_filter_and_block` keeps merging mentions on `(text, type)` exactly as in the other arms, so `'none'` is not `dedup=False` and must not be implemented as such.
 
-* **Tail types**: `re` always emits `<e_type> tail_type`; `joint` emits it iff `joint_tail_type=True`; the boundary variants never do.
+* **Types**: `joint` always emits `<e_type>` for both the head and the tail; `boundary_joint` never does. One flag, `emits_types = variant == 'joint'`, governs both — Axis 2 settled it and it is not configurable.
+* **Head rejection**: a block with no relations closes on `<no_rel>`, unconditionally.
 * **Cap**: markers spend one sentinel per block, the first included, so the 95 indices below the roles allow **95** blocks; rejection reserves one further index for its own marker (Stage 3), leaving **94**. Excess blocks are truncated with a warning. The cap is what keeps a marker from ever reaching `<extra_id_95>` and colliding with a role.
 * **Rejection** (`use_rejection=True`) appends `<null> type` for every sampled negative, including when the graph is otherwise empty. Stage 3 of the port replaces this with the single-marker CoT rejection tail.
 
@@ -250,7 +227,7 @@ Reconciles relation tails against the entity blocks, in place. Shared by `parse_
 >
 > Since gold is now read from the annotation rather than round-tripped through the target format (§4.3), gold carries the *true* tail type while the prediction carries the first-occurrence one. The model is therefore genuinely penalised on these triples, and a flawless generation cannot reach `strict_f1 = 1.0` on a sentence containing a homograph tail. This is honest measurement, not a bug — but it is a ceiling worth knowing about when reading strict numbers.
 >
-> Affected volume is small: 0 cases in CoNLL04 and NYT, 3 in SciERC train, and 28 / 1 / 4 in `scierc_doc` train / val / test. Emitting inline tail types for `joint` is the only real fix — which is exactly what `graph.joint_tail_type: true` does, and why the B1 vs B2 comparison partly measures a scoring artefact rather than a pure format effect (§9).
+> Affected volume is small: 0 cases in CoNLL04 and NYT, 3 in SciERC train, and 28 / 1 / 4 in `scierc_doc` train / val / test. Emitting inline tail types is the fix, and it is now unconditional for `joint` — so the ceiling is closed on the surviving format. It mattered while B1 vs B2 was open, because part of that comparison measured this artefact rather than a pure format effect (§9).
 
 ---
 
@@ -270,7 +247,7 @@ The instruction alone, without the source text — kept separate so Stage 3's Co
 ##### `build_encoder_input(text, rel_types, ent_types=None, use_ent_types=True, random_order=False, prompt='natural') -> str`
 Instruction + `" Text: {text}"`. `prompt.type: false` returns the raw text instead.
 
-Type lists are sorted unless `random_prompt`. The four per-variant builders (`build_re_encoder_input`, `build_joint_encoder_input`, `build_boundary_re_encoder_input`, `build_boundary_joint_encoder_input`) are retained as thin wrappers with unchanged signatures, so `collator.py` is untouched by the consolidation.
+Type lists are sorted unless `random_prompt`. Two thin per-variant wrappers remain — `build_joint_encoder_input` and `build_boundary_joint_encoder_input` — because `collator.py` dispatches by name.
 
 > **The leading verb is not a config key.** The `Extract` / `Mark` arm (Axis 3, C1) is a one-word edit made by hand in this file.
 
@@ -361,7 +338,6 @@ Configuration is passed as a plain dict (assembled in `train.py` / `evaluate.py`
 | `random_graph` | Shuffle entity and relation order in the target. |
 | `use_rejection` | Append `<null> type` markers for sampled negatives. |
 | `nesting` | `'nr_type'` / `'r_type'` / `'none'` — see `build_graph`. |
-| `joint_tail_type` | Emit inline tail types for `joint`. `re` always emits them regardless. |
 | `prompt_style` | `'direct'` or `'cot'`. Reserved for Stage 3; unused by the current builders. |
 | `dedup` | Collapse entities on `(text, type)` and relations on the full quintuple during block building. See `organise_filter_and_block`. |
 | `max_steps`, `pos_rate_*`, `neg_rate_*`, `pos_max_*`, `neg_max_*` | Bernoulli curriculum endpoints. |
@@ -370,7 +346,7 @@ Configuration is passed as a plain dict (assembled in `train.py` / `evaluate.py`
 ##### `__call__(batch) -> Dict[str, Tensor]`
 Dispatches each instance through `getattr(self, f"prepare_{self.variant}")`, collecting `(encoder_input, decoder_target)` string pairs, then tokenises the batch.
 
-##### `prepare_re` / `prepare_boundary_re` / `prepare_joint` / `prepare_boundary_joint`
+##### `prepare_joint` / `prepare_boundary_joint`
 Each follows the same three steps, differing only in which schemas are sampled and whether types are used:
 
 1. `sample_types(...)` $\rightarrow$ `(positives, negatives)` for the entity and/or relation schema.
@@ -380,9 +356,7 @@ Each follows the same three steps, differing only in which schemas are sampled a
 | Method | Entity schema sampled | `use_types` | Rejection types passed |
 |---|---|---|---|
 | `prepare_joint` | yes | `True` | entity + relation negatives |
-| `prepare_re` | yes | `True` | entity + relation negatives |
 | `prepare_boundary_joint` | no | `False` | relation negatives only |
-| `prepare_boundary_re` | no | `False` | relation negatives only |
 
 Because the gold graph is filtered to `set(positives)`, a type dropped from the prompt is also dropped from the target — prompt and target always agree.
 
@@ -458,12 +432,14 @@ Extracts text tuples from the blocks in one pass and calls `score_bundles` with 
 
 Metrics emitted per variant:
 
-| Metric key prefix | Matched tuple | `joint` | `re` | `boundary_joint` | `boundary_re` |
-|---|---|:---:|:---:|:---:|:---:|
-| `ner_boundary_*` | `head_text` | ✓ | ✓ | ✓ | ✓ |
-| `ner_*`, `macro_ner_*` | `(head_text, head_type)` | ✓ | ✓ | — | — |
-| `boundary_*`, `macro_boundary_*` | `(head_text, rel_type, tail_text)` | ✓ | ✓ | ✓ | ✓ |
-| `strict_*`, `macro_strict_*` | `(head_text, head_type, rel_type, tail_text, tail_type)` | ✓ | ✓ | — | — |
+| Metric key prefix | Matched tuple | `joint` | `boundary_joint` |
+|---|---|:---:|:---:|
+| `ner_boundary_*` | `head_text` | ✓ | ✓ |
+| `ner_*`, `macro_ner_*` | `(head_text, head_type)` | ✓ | — |
+| `boundary_*`, `macro_boundary_*` | `(head_text, rel_type, tail_text)` | ✓ | ✓ |
+| `strict_*`, `macro_strict_*` | `(head_text, head_type, rel_type, tail_text, tail_type)` | ✓ | — |
+
+> The two boundary rows are unconditional now that both surviving variants predict spans and relations; only the typed rows still branch.
 
 Each prefix yields `_precision`, `_recall` and `_f1`. `ner_boundary` is micro-only — there is no type to group a macro average by. Because the boundary variants emit no `strict_f1`, their configs must set `validation.early_stopping_metric: boundary_f1`.
 
@@ -510,7 +486,7 @@ Builds gold **directly from the preprocessed instance**. Gold was previously obt
 Runs `organise_filter_and_block` on the raw instance, passing the instance's own `entity_types` / `rel_types` as the allowed schema. This reproduces `budget` sampling exactly — budget keeps every positive and only pads the prompt with negatives, so nothing in the gold graph is ever filtered out, and evaluation always runs in budget mode via `to_eval_mode()`. The result is passed through `resolve_tail_entities`, since predictions are reconciled the same way; without it the RE variants would score every tail mention as a precision error.
 
 ##### `build_gold_offsets(instance, variant) -> bundle`
-Reads offsets straight off the annotation, **independent of `dedup`** — a deduplicated block keeps only its first offset, so offset gold cannot be derived from blocks without losing exactly the repeated mentions it exists to measure. For `re` / `boundary_re` it is restricted to relation participants, since those variants never ask the model for non-participating entities and scoring against them would cap recall at an unreachable value.
+Reads offsets straight off the annotation, **independent of `dedup`** — a deduplicated block keeps only its first offset, so offset gold cannot be derived from blocks without losing exactly the repeated mentions it exists to measure. It is no longer restricted to relation participants: that existed for the RE variants, which never asked the model for non-participating entities, and both surviving variants score against every annotated entity.
 
 ---
 
@@ -687,10 +663,13 @@ Fine-tuning and pre-training share this entry point.
 5. Builds the collator, callbacks, `Seq2SeqTrainingArguments` and `S2GTrainer`, then trains.
 6. On rank 0: saves `best_model/` with `variant.txt` and `s2g_format.json`, then runs streaming evaluation on val and test and logs `final_val/*` / `final_test/*` to W&B.
 
-**`s2g_format.json`** persists every setting that changes how targets are linearised — `variant`, `prompt_type`, `style`, `use_rejection`, `nesting`, `joint_tail_type`, `dedup`, `max_ent_types`, `max_rel_types`, `token_strs` — so standalone evaluation cannot silently score against a different format. This matters more on this branch than it ever did: with eight arms in flight, scoring an arm's checkpoint under another arm's format is a live risk, not a hypothetical one.
+**`s2g_format.json`** persists every setting that changes how targets are linearised — `variant`, `prompt_type`, `style`, `use_rejection`, `nesting`, `dedup`, `max_ent_types`, `max_rel_types`, `token_strs` — so standalone evaluation cannot silently score against a different format. With several arms in flight, scoring an arm's checkpoint under another arm's format is a live risk rather than a hypothetical one.
 
 ### 6.3. `evaluate.py`
-Standalone evaluation of a saved checkpoint. Reads `s2g_format.json` from the checkpoint directory and prefers it over the evaluation config for every format-critical setting — `nesting`, `joint_tail_type`, `style` and the rest — warning loudly when the sidecar is missing and **raising** when its `token_strs` disagree with the current map, since no setting could make those metrics meaningful. The variant is resolved from the sidecar, then `variant.txt`, then the config. Collation is forced to budget mode via `to_eval_mode()`.
+Standalone evaluation of a saved checkpoint. Reads `s2g_format.json` from the checkpoint directory and prefers it over the evaluation config for every format-critical setting — `nesting`, `style` and the rest — warning loudly when the sidecar is missing. Two guards **raise** rather than report meaningless numbers:
+
+* `check_format_support` — the sidecar names a **retired format**: a `re` / `boundary_re` variant, or `joint_tail_type: false` / `inline_none: false` from a losing Axis-2 arm. Those targets are ones `build_graph` no longer produces, so gold would be rebuilt in the winning format and scored against the wrong reference. An *absent* key is not `False`: it just means a sidecar predating the key.
+* `check_token_map` — the sidecar's `token_strs` conflict with the current map on a shared key, or a currently-active role is missing from it. The variant is resolved from the sidecar, then `variant.txt`, then the config. Collation is forced to budget mode via `to_eval_mode()`.
 
 ### 6.4. `measure_lengths.py`
 Scans every split and reports p50/p75/p90/p95/p99/max encoder and decoder token lengths, then suggests `max_source_length` / `max_target_length` as p99 rounded up to a multiple of 32. **Re-run once per ablation arm**: the prompt wording and `nesting: none` both change target length, so a budget measured for one arm may truncate another. The measured values are recorded per arm rather than held constant. Sets the collator's step to `max_steps` first, so bernoulli schedules are measured at their worst-case negative-sampling endpoint.
@@ -714,7 +693,7 @@ configs/
 └── variants/                # Ready-to-run per (variant, dataset) configs
     ├── ablation/            # CoNLL04 ablation arms (see §9)
     │   └── baseline.yaml
-    └── joint | boundary_joint | re | boundary_re
+    └── joint | boundary_joint
         └── conll04.yaml | nyt.yaml
 ```
 
@@ -724,8 +703,8 @@ Points worth knowing when writing a new variant config:
 
 * `validation.early_stopping_metric` must be `boundary_f1` for the boundary variants — they emit no `strict_f1`. The offset metrics (`offset_strict_f1`, ...) are also valid choices.
 * `scheduler.type: inverse_sqrt` is handled by `S2GTrainer`, not HF.
-* `graph.dedup`, `graph.nesting`, `graph.joint_tail_type`, `graph.use_rejection`, `prompt.type` and `prompt.style` must match between training and evaluation; the `s2g_format.json` sidecar enforces this automatically.
-* `graph.use_nesting`, `graph.markers` and `train.warm_start` no longer exist. Because the config is a *structured* OmegaConf schema, a stale key fails at load time rather than being ignored — including as a CLI override, so `graph.markers=rolling` is now an error rather than a no-op.
+* `graph.dedup`, `graph.nesting`, `graph.use_rejection`, `prompt.type` and `prompt.style` must match between training and evaluation; the `s2g_format.json` sidecar enforces this automatically.
+* `graph.use_nesting`, `graph.markers`, `train.warm_start`, `graph.joint_tail_type` and `graph.inline_none` no longer exist. Because the config is a *structured* OmegaConf schema, a stale key fails at load time rather than being ignored — including as a CLI override, so `graph.markers=rolling` is now an error rather than a no-op.
 * CoNLL04 runs use flan-t5-base, ~2882 steps (~100 epochs over 922 sentences at effective batch 32), `constant_with_warmup`, and validate once per epoch (`check_interval: 29`).
 * NYT values are placeholders pending benchmarking.
 
@@ -768,15 +747,18 @@ This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): 
 |---|---|---|
 | 1 — Markers *(settled)* | A1 | one reused marker — **removed from the code** |
 | | A2 *(winner, now the only form)* | rolling `<extra_id_i>`, one per block |
-| 2a — Variant | B1 | `model.variant: joint`, `graph.joint_tail_type: true` |
-| | B2 | `model.variant: joint`, `graph.joint_tail_type: false` |
+| 2a — Variant *(settled)* | B1 *(winner, now the only form)* | `joint` with inline tail types and `<no_rel>` head rejection |
+| | B2 | `joint` without them — **removed from the code** |
+| | `re` baseline | **removed from the code** |
 | 2b — Nesting | B3 | `graph.nesting: r_type` |
 | | B4 | `graph.nesting: none` |
 | 3 — Prompts | C1 | "Mark" wording (hand edit in `prompt.py`) |
 | | C2 | `prompt.style: cot`, `graph.use_rejection: true` *(Stage 3, not yet implemented)* |
 | | control | `prompt.style: direct`, `graph.use_rejection: true` — separates rejection from CoT |
 
-Stage 2a resolves as `winner(B1, B2)` vs the `re` baseline; Stage 2b runs B3 and B4 on that winner, with the carried `nr_type` run as the third reference point. Boundary variants are **not** ablated — they are complementary to the typed variants rather than comparable, so the boundary counterpart of the winning variant is adopted without a run.
+Stage 2a resolved in favour of `joint` with inline tail types and `<no_rel>` head rejection, over `joint` without them and over the `re` baseline. Stage 2b runs B3 and B4 on that winner, with the carried `nr_type` run as the third reference point. Boundary variants are **not** ablated — they are complementary to the typed variants rather than comparable, so `boundary_joint` is adopted alongside `joint` without a run.
+
+> The losing arms are gone from the code, not merely unselected: the RE variants, the `joint_tail_type` switch and the `inline_none` switch have all been removed. Reproducing B2 or the `re` baseline requires an earlier revision, and their checkpoints are refused by `evaluate.py` rather than silently mis-scored.
 
 Held constant across every run: flan-t5-base, `max_steps=2882`, batch 32 × grad-acc 1, `lr=3e-4`, `weight_decay=0.01`, `constant_with_warmup`, `warmup_steps=346`, `check_interval=29`, `percent_check=1.0`, `train_percent_check=0.25`, `bf16`, `dedup: true`, `random_prompt: false`, `random_graph: false`, `early_stopping_patience=10`, `early_stopping_metric: strict_f1`, `save_top_k=1`, `save_only_model: true`, `checkpoint.every_n_steps: null`. Only `train.seed` varies within an arm; only the setting under test varies between arms.
 
@@ -805,6 +787,6 @@ Because all arms score the same test instances, compare them **paired on instanc
 
 ### Caveats to carry into the writeup
 
-* **NER metrics are not comparable across the Stage-2a `re` vs `joint` comparison.** Gold differs between them by construction: `build_gold_offsets` restricts `re` / `boundary_re` gold to relation participants, while `joint` scores against every annotated entity. The relation tuples are identical, so `strict_f1` — the deciding metric — *is* comparable; but every `ner_*` and `offset_ner_*` figure moves for reasons that have nothing to do with the format under test. Report the NER numbers within a variant, never across that boundary.
-* **B1 vs B2 moves the homograph ceiling.** With inline tail types, `resolve_tail_entities` no longer has to guess a tail's type by first-occurrence surface match (§2.2). Part of any `strict_f1` shift is therefore a measurement artefact rather than a format effect. CoNLL04 has 0 affected cases, which bounds the size of this — but state it.
+* **NER metrics were not comparable across the Stage-2a `re` vs `joint` comparison.** Gold differed between them by construction: `build_gold_offsets` restricted `re` / `boundary_re` gold to relation participants, while `joint` scores against every annotated entity. The relation tuples were identical, so `strict_f1` — the deciding metric — *was* comparable; but every `ner_*` and `offset_ner_*` figure moved for reasons unrelated to the format under test. State this when reporting Axis 2; it no longer applies going forward, since only `joint` gold remains.
+* **B1 vs B2 moved the homograph ceiling.** With inline tail types, `resolve_tail_entities` no longer has to guess a tail's type by first-occurrence surface match (§2.2). Part of that `strict_f1` shift was therefore a measurement artefact rather than a format effect. CoNLL04 has 0 affected cases, which bounds the size of it — but state it when reporting the axis. Inline tail types are now unconditional, so the ceiling is closed for every arm that follows.
 * **C2 confounds CoT with rejection.** It is the only arm carrying `use_rejection`, so a CoT delta cannot be attributed to step-by-step framing alone. `prompt.style` and `graph.use_rejection` are orthogonal keys, so the *direct + rejection* control is a single config flip — 5 runs, ~35 minutes, and the only way to separate the two. Run it rather than caveating it.

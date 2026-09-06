@@ -226,11 +226,7 @@ def main() -> None:
 
     # Every linearisation token is a reserved sentinel, so nothing is added to the
     # vocabulary — only that the tokenizer still round-trips them is checked.
-    tokens = S2GTokens(
-        variant=cfg.model.variant,
-        use_rejection=cfg.graph.use_rejection,
-        inline_none=cfg.graph.inline_none,
-    )
+    tokens = S2GTokens(variant=cfg.model.variant, use_rejection=cfg.graph.use_rejection)
     verify_token_integrity(tokenizer)
 
     # Set up S2G collator
@@ -259,8 +255,6 @@ def main() -> None:
             'prompt_style': cfg.prompt.style,
             'use_rejection': cfg.graph.use_rejection,
             'nesting': cfg.graph.nesting,
-            'joint_tail_type': cfg.graph.joint_tail_type,
-            'inline_none': cfg.graph.inline_none,
             'dedup': cfg.graph.dedup,
             'random_graph': cfg.graph.random_graph,
             'seed': cfg.train.seed,
@@ -398,8 +392,6 @@ def main() -> None:
                 'style':           cfg.prompt.style,
                 'use_rejection':   cfg.graph.use_rejection,
                 'nesting':         cfg.graph.nesting,
-                'joint_tail_type': cfg.graph.joint_tail_type,
-                'inline_none':     cfg.graph.inline_none,
                 'dedup':           cfg.graph.dedup,
                 # A checkpoint trained under one token map cannot be scored under
                 # another; evaluate.py refuses to try.

@@ -167,12 +167,11 @@ def score_bundles(
     # Compute metrics
     m: Dict[str, float] = {}
 
-    # Entity boundary
-    if variant in {'boundary_joint', 'boundary_re', 're', 'joint'}:
-        m.update(corpus_prf(all_pred_entities, all_gold_entities, f'{prefix}ner_boundary'))
+    # Entity boundary — both variants predict spans, so this is unconditional.
+    m.update(corpus_prf(all_pred_entities, all_gold_entities, f'{prefix}ner_boundary'))
 
     # Entity strict
-    if variant in {'joint', 're'}:
+    if variant == 'joint':
         if ent_schema is None:
             raise ValueError(f"'ent_schema' must be provided for variant '{variant}' to get macro metrics.")
 
@@ -181,19 +180,15 @@ def score_bundles(
             m.update(per_type_macro(all_pred_entity_mentions, all_gold_entity_mentions, lambda x: x[1], ent_schema, f"{prefix}ner"))
 
     # Relation boundary
-    if variant in {'boundary_re', 'boundary_joint', 're', 'joint'}:
-        if rel_schema is None:
-            raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
+    if rel_schema is None:
+        raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
 
-        m.update(corpus_prf(all_pred_triplets, all_gold_triplets, f'{prefix}boundary'))
-        if include_macro:
-            m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
+    m.update(corpus_prf(all_pred_triplets, all_gold_triplets, f'{prefix}boundary'))
+    if include_macro:
+        m.update(per_type_macro(all_pred_triplets, all_gold_triplets, lambda t: t[1], rel_schema, f"{prefix}boundary"))
 
-    # Relation strict
-    if variant in {'re', 'joint'}:
-        if rel_schema is None:
-            raise ValueError(f"'rel_schema' must be provided for variant '{variant}' to get macro metrics.")
-
+    # Relation strict — rel_schema is already known to be present.
+    if variant == 'joint':
         m.update(corpus_prf(all_pred_quintuples, all_gold_quintuples, f'{prefix}strict'))
         if include_macro:
             m.update(per_type_macro(all_pred_quintuples, all_gold_quintuples, lambda q: q[2], rel_schema, f"{prefix}strict"))

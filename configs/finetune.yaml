@@ -27,7 +27,7 @@
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null       # Set to pre-trained checkpoint path
-  variant: joint                    # "re" | "boundary_re" | "joint" | "boundary_joint"
+  variant: joint                    # "joint" | "boundary_joint"
 
 tokenizer:
   max_source_length: 300
@@ -60,7 +60,7 @@ validation:
   train_percent_check: 0.05         # 5% train subsample for train/val gap monitoring
   batch_size: 32
   early_stopping_patience: 10
-  early_stopping_metric: boundary_f1   # boundary_f1 (all variants) | strict_f1 (re/joint, includes types)
+  early_stopping_metric: boundary_f1   # boundary_f1 (both variants) | strict_f1 (joint only, includes types)
 
 generation:
   num_beams: 4

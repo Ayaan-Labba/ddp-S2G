@@ -15,8 +15,6 @@ from s2g.linearisation import (
     build_graph,
     build_boundary_joint_encoder_input,
     build_joint_encoder_input,
-    build_re_encoder_input, 
-    build_boundary_re_encoder_input, 
     organise_filter_and_block, 
     VALID_VARIANTS
 )
@@ -45,14 +43,10 @@ class S2GCollator:
         self.random_graph = config.get('random_graph', False)
         self.use_rejection = config.get('use_rejection', True)
         self.nesting = config.get('nesting', 'nr_type')
-        self.joint_tail_type = config.get('joint_tail_type', False)
-        self.inline_none = config.get('inline_none', False)
         self.prompt_style = config.get('prompt_style', 'direct')
         self.dedup = config.get('dedup', True)
         self.prompt_type = config.get('prompt_type', 'natural')
-        self.tok: S2GTokens = S2GTokens(
-            self.variant, use_rejection=self.use_rejection, inline_none=self.inline_none
-        )
+        self.tok: S2GTokens = S2GTokens(self.variant, use_rejection=self.use_rejection)
         self.seed = int(config.get('seed', 0))
         self._rng = random.Random(self.seed)
         self._rng_worker: Optional[int] = None      # None = not yet bound to a process
@@ -111,52 +105,6 @@ class S2GCollator:
 
         return self.tokenize(encoder_inputs, decoder_targets)
 
-    def prepare_re(self, inst: Dict) -> Tuple[str, str]:
-        pos_ent, neg_ent = self.sample_types(
-            inst['entity_types'], self.ent_schema, self.cfg.get('max_ent_types')
-        )
-        pos_rel, neg_rel = self.sample_types(
-            inst['rel_types'], self.rel_schema, self.cfg.get('max_rel_types')
-        )
-        enc = build_re_encoder_input(
-            pos_ent + neg_ent, pos_rel + neg_rel, inst['text'], 
-            random_order=self.random_prompt, prompt=self.prompt_type
-        )
-        blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(pos_ent), set(pos_rel),
-            variant='re', use_types=True, dedup=self.dedup
-        )
-        dec = build_graph(
-            blocks, 're', self.tok, 
-            nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
-            random_graph=self.random_graph, 
-            use_rejection=self.use_rejection, rejected_ent_types=neg_ent, 
-            rejected_rel_types=neg_rel
-        )
-        return enc, dec
-
-    def prepare_boundary_re(self, inst: Dict) -> Tuple[str, str]:
-        pos_rel, neg_rel = self.sample_types(
-            inst['rel_types'], self.rel_schema, self.cfg.get('max_rel_types')
-        )
-        enc = build_boundary_re_encoder_input(
-            pos_rel + neg_rel, inst['text'], 
-            random_order=self.random_prompt, prompt=self.prompt_type
-        )
-        blocks = organise_filter_and_block(
-            inst['entities'], inst['relations'], set(), set(pos_rel),
-            variant='boundary_re', use_types=False, dedup=self.dedup
-        )
-        dec = build_graph(
-            blocks, 'boundary_re', self.tok, 
-            nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
-            random_graph=self.random_graph, 
-            use_rejection=self.use_rejection, rejected_rel_types=neg_rel
-        )
-        return enc, dec
-
     def prepare_boundary_joint(self, inst: Dict) -> Tuple[str, str]:
         pos_rel, neg_rel = self.sample_types(
             inst['rel_types'], self.rel_schema, self.cfg.get('max_rel_types')
@@ -172,7 +120,6 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
             random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_rel_types=neg_rel
         )
@@ -196,7 +143,6 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'joint', self.tok, 
             nesting=self.nesting,
-            joint_tail_type=self.joint_tail_type, inline_none=self.inline_none,
             random_graph=self.random_graph, 
             use_rejection=self.use_rejection, rejected_ent_types=neg_ent, 
             rejected_rel_types=neg_rel

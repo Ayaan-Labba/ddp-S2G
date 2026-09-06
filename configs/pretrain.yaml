@@ -16,7 +16,7 @@
 model:
   name: google/flan-t5-large        # Pre-trained Flan-T5 variant (~780M params)
   pretrained_checkpoint: null
-  variant: re
+  variant: joint
 
 tokenizer:
   max_source_length: 300            # Encoder input budget (instruction + text)

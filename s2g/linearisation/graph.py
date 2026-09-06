@@ -11,9 +11,7 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .special_tokens import (
-    JOINT_VARIANTS, MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS,
-)
+from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +20,6 @@ Triplet = Tuple[str, str, str]
 RejectedItem = str
 
 VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
-TYPED_VARIANTS: Set[str] = {'joint', 're'}
 
 # Every linearisation token is a sentinel, so one pattern isolates them all during
 # parsing. Which of them are *roles* is decided by identity, never by pattern.
@@ -53,21 +50,15 @@ def organise_filter_and_block(
     filtered_ents.sort(key=lambda e: e['offset'])
     filtered_rels.sort(key=lambda r: (r['head']['offset'], r['tail']['offset']))
 
-    # 3. Select the entities that are entitled to a block: the joint variants emit
-    # every entity, the RE variants only those heading at least one relation.
-    if variant in JOINT_VARIANTS:
-        block_ents = filtered_ents
-    else:
-        head_offsets = {tuple(r['head']['offset']) for r in filtered_rels}
-        block_ents = [e for e in filtered_ents if tuple(e['offset']) in head_offsets]
-
-    # 4. Build blocks. Without ``dedup`` every mention keeps its own block; otherwise
-    # mentions collapse on (text, type), so genuine homographs stay separate.
+    # 3. Build blocks. Every entity is entitled to one, relation-less included —
+    # the RE variants, which gave a block only to relation heads, are retired.
+    # Without ``dedup`` every mention keeps its own block; otherwise mentions
+    # collapse on (text, type), so genuine homographs stay separate.
     offset_to_ent: Dict[Tuple[int, int], EntityBlock] = {}
     blocks: List[EntityBlock] = []
     key_to_ent: Dict[Tuple[str, Optional[str]], EntityBlock] = {}
 
-    for ent in block_ents:
+    for ent in filtered_ents:
         ent_type = ent.get('type') if use_types else None
         block_key = (ent['text'], ent_type)
         block = key_to_ent.get(block_key) if dedup else None
@@ -85,7 +76,7 @@ def organise_filter_and_block(
 
         offset_to_ent[tuple(ent['offset'])] = block
 
-    # 5. Attach relations to their head block.
+    # 4. Attach relations to their head block.
     seen_rels: Set[Tuple] = set()
     for rel in filtered_rels:
         head_block = offset_to_ent[tuple(rel['head']['offset'])]
@@ -125,8 +116,6 @@ def build_graph(
         variant: str,
         tokens: S2GTokens,
         nesting: str = 'nr_type',
-        joint_tail_type: bool = False,
-        inline_none: bool = False,
         random_graph: bool = False,
         use_rejection: bool = False,
         rejected_ent_types: List[str] = None,
@@ -153,7 +142,7 @@ def build_graph(
     # the RE variants only those heading at least one relation. Capping the
     # candidate list instead would under-fill the RE targets, dropping heads that
     # would have fitted once the relation-less entities were skipped.
-    emit = ordered if variant in JOINT_VARIANTS else [(e, r) for e, r in ordered if r]
+    emit = ordered
 
     if nesting == 'none':
         # One relation per block: a k-relation head becomes k blocks with its
@@ -175,16 +164,14 @@ def build_graph(
         )
         emit = emit[:cap]
 
-    emits_ent_type = variant in TYPED_VARIANTS
-    emits_tail_type = variant == 're' or (variant == 'joint' and joint_tail_type)
-    # Only the joint variants emit relation-less blocks at all, so the marker is a
-    # documented no-op elsewhere rather than something that silently never fires.
-    emits_no_rel = inline_none and variant in JOINT_VARIANTS
+    # Axis 2 settled both: ``joint`` carries entity types and inline tail types,
+    # and the boundary variant carries neither. Neither is configurable any more.
+    emits_types = variant == 'joint'
 
     parts = []
     for block_idx, (ent, rels) in enumerate(emit):
         ent_toks = [tokens.sentinel_token(block_idx), ent['text']]
-        if emits_ent_type and ent.get('type'):
+        if emits_types and ent.get('type'):
             ent_toks.extend([tokens.token_strs['e_type'], ent['type']])
 
         for i, rel in enumerate(rels):
@@ -193,12 +180,12 @@ def build_graph(
                 else tokens.token_strs['r_type']
             )
             ent_toks.extend([rel_token, rel['type'], tokens.token_strs['tail'], rel['tail_text']])
-            if emits_tail_type and (tail_type := rel.get('tail_type')):
+            if emits_types and (tail_type := rel.get('tail_type')):
                 ent_toks.extend([tokens.token_strs['e_type'], tail_type])
 
         # Closes a block that heads nothing, stating the absence rather than leaving
         # it to be inferred from the next marker arriving early.
-        if emits_no_rel and not rels:
+        if not rels:
             ent_toks.append(tokens.token_strs['no_rel'])
 
         parts.append(" ".join(ent_toks))
@@ -207,7 +194,7 @@ def build_graph(
         append_null_block(
             parts,
             tokens,
-            ent_types=(rejected_ent_types or []) if variant in TYPED_VARIANTS else [],
+            ent_types=(rejected_ent_types or []) if emits_types else [],
             rel_types=rejected_rel_types or [],
             random_graph=random_graph
         )

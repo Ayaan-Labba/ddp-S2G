@@ -17,9 +17,6 @@ from s2g.linearisation import EntityBlock, organise_filter_and_block, resolve_ta
 # (triplets, quintuples, entities, mentions) for one instance
 OffsetBundle = Tuple[List[Tuple], List[Tuple], List[Tuple], List[Tuple]]
 
-TYPED_VARIANTS = {'joint', 're'}
-HEAD_ONLY_VARIANTS = {'re', 'boundary_re'}
-
 
 def build_gold_blocks(instance: Dict[str, Any], variant: str, dedup: bool = True) -> List[EntityBlock]:
     """
@@ -31,7 +28,7 @@ def build_gold_blocks(instance: Dict[str, Any], variant: str, dedup: bool = True
     prompt with negatives, so nothing in the gold graph is ever filtered out.
     Evaluation always runs in budget mode (``S2GCollator.to_eval_mode``).
     """
-    use_types = variant in TYPED_VARIANTS
+    use_types = variant == 'joint'
     blocks = organise_filter_and_block(
         instance.get('entities', []),
         instance.get('relations', []),
@@ -41,9 +38,11 @@ def build_gold_blocks(instance: Dict[str, Any], variant: str, dedup: bool = True
         use_types=use_types,
         dedup=dedup,
     )
-    # Predicted blocks are reconciled by ``parse_graph``; gold must be reconciled
-    # the same way or the RE variants would score tail mentions as pure precision
-    # errors, since only heads get a block of their own there.
+    # Predicted blocks are reconciled by ``parse_graph``; gold goes through the
+    # same call so both sides of a comparison are shaped identically. It is close
+    # to inert on gold now that every entity has a block of its own — but a
+    # *prediction* can still name a tail that has none, and that is what the
+    # reconciliation is for.
     return resolve_tail_entities(blocks)
 
 
@@ -55,16 +54,9 @@ def build_gold_offsets(instance: Dict[str, Any], variant: str) -> OffsetBundle:
     so offset gold cannot be derived from blocks without losing repeated
     mentions — which is the whole point of scoring on offsets.
     """
-    use_types = variant in TYPED_VARIANTS
+    use_types = variant == 'joint'
     entities = instance.get('entities', [])
     relations = instance.get('relations', [])
-
-    if variant in HEAD_ONLY_VARIANTS:
-        # These variants only ask for relation participants; scoring against every
-        # annotated entity would cap recall at something never trained for.
-        participants = {tuple(r['head']['offset']) for r in relations}
-        participants |= {tuple(r['tail']['offset']) for r in relations}
-        entities = [e for e in entities if tuple(e['offset']) in participants]
 
     ent_offsets = [tuple(e['offset']) for e in entities]
     mentions = [(tuple(e['offset']), e['type']) for e in entities] if use_types else []

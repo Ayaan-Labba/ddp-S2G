@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import torch
 from torch.utils.data import DataLoader
@@ -15,11 +15,39 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, set_seed
 
 from s2g.data import S2GCollator, S2GDataset, set_parent_death_signal
 from s2g.evaluation import S2GEvaluator
-from s2g.linearisation import S2GTokens, verify_token_integrity
+from s2g.linearisation import S2GTokens, VALID_VARIANTS, verify_token_integrity
 from s2g.scripts.config_utils import load_config, load_ent_schema, load_schema
 from s2g.scripts.train import configure_dataloader_start_method, preload_forkserver_modules
 
 logger = logging.getLogger(__name__)
+
+
+def check_format_support(ckpt, variant: str, fmt: Dict[str, Any]) -> None:
+    """
+    Refuse a checkpoint whose sidecar records a format this revision cannot emit.
+
+    Axis 2 retired the RE variants and made inline tail types and the ``<no_rel>``
+    head marker unconditional, so the losing arms' checkpoints describe targets
+    that ``build_graph`` no longer produces. Scoring one would rebuild its gold in
+    the *winning* format and report plausible numbers against the wrong reference,
+    which is precisely the failure the sidecar exists to prevent.
+    """
+    retired = {}
+    if variant not in VALID_VARIANTS:
+        retired['variant'] = variant
+    # Absent means an older sidecar that predates the key; only an explicit False
+    # is a format this code cannot reproduce.
+    for key in ('joint_tail_type', 'inline_none'):
+        if fmt.get(key) is False:
+            retired[key] = False
+
+    if retired:
+        raise RuntimeError(
+            f"{ckpt} was trained under a retired format: {retired}. Axis 2 removed "
+            "the RE variants and made inline tail types and the <no_rel> head marker "
+            "unconditional, so this revision cannot rebuild that gold. Score it with "
+            "the revision it was trained on."
+        )
 
 
 def check_token_map(ckpt, saved: Optional[Dict[str, str]], tokens: S2GTokens) -> None:
@@ -83,8 +111,8 @@ def main() -> None:
     else:
         logger.warning(
             "%s not found; falling back to the evaluation config. Verify that "
-            "graph.use_rejection / graph.nesting / graph.joint_tail_type / "
-            "graph.inline_none / graph.dedup / prompt.type / prompt.style "
+            "graph.use_rejection / graph.nesting / graph.dedup / "
+            "prompt.type / prompt.style "
             "match training.",
             fmt_file,
         )
@@ -99,15 +127,12 @@ def main() -> None:
 
     use_rejection = fmt.get('use_rejection', cfg.graph.use_rejection)
     nesting = fmt.get('nesting', cfg.graph.nesting)
-    joint_tail_type = fmt.get('joint_tail_type', cfg.graph.joint_tail_type)
-    inline_none = fmt.get('inline_none', cfg.graph.inline_none)
     dedup = fmt.get('dedup', cfg.graph.dedup)
     prompt_type = fmt.get('prompt_type', cfg.prompt.type)
     prompt_style = fmt.get('style', cfg.prompt.style)
-    tokens = S2GTokens(
-        variant=variant, use_rejection=use_rejection, inline_none=inline_none
-    )
+    tokens = S2GTokens(variant=variant, use_rejection=use_rejection)
 
+    check_format_support(ckpt, variant, fmt)
     check_token_map(ckpt, fmt.get('token_strs'), tokens)
     verify_token_integrity(tokenizer)
 
@@ -141,8 +166,6 @@ def main() -> None:
             'random_graph': cfg.graph.random_graph,
             'use_rejection': use_rejection,
             'nesting': nesting,
-            'joint_tail_type': joint_tail_type,
-            'inline_none': inline_none,
             'dedup': dedup,
             'seed': cfg.train.seed,
         }

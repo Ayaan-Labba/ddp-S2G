@@ -22,7 +22,7 @@ from transformers import (
 
 from s2g.data import S2GCollator
 from s2g.evaluation.gold import build_gold_blocks
-from s2g.linearisation import extract_triplets, parse_graph
+from s2g.linearisation import VALID_VARIANTS, extract_triplets, parse_graph
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
         collator: S2GCollator,
         interval: int = 1_000,
     ) -> None:
-        if variant not in {'re', 'boundary_re', 'joint', 'boundary_joint'}:
+        if variant not in VALID_VARIANTS:
             raise ValueError(f"Unknown variant {variant!r}.")
 
         self.tokenizer = tokenizer
@@ -258,7 +258,7 @@ class GenerateTextSamplesCallback(TrainerCallback):
             'Gold Graph'
         ]
         
-        include_types = self.variant in {'joint', 're'}
+        include_types = self.variant == 'joint'
 
         for i, inst in enumerate(instances):
             p_graph, g_graph = pred_texts[i], gold_texts[i]

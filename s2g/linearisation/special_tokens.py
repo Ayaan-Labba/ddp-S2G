@@ -15,11 +15,11 @@ from transformers import AutoTokenizer
 # different sentinel — silently invalidating every target and checkpoint built under
 # the old map. New roles go first; the tail of this list stays put.
 ALL_TOKEN_NAMES: List[str] = ['no_rel', 'e_type', 'r_type', 'nr_type', 'tail', 'null']
-VALID_VARIANTS: Set = {'re', 'boundary_re', 'boundary_joint', 'joint'}
 
-# The variants that emit a block for every entity, relation-less ones included, and
-# so are the only ones where ``no_rel`` can ever fire.
-JOINT_VARIANTS: Set[str] = {'joint', 'boundary_joint'}
+# Both surviving variants emit a block for every entity, relation-less ones
+# included. The RE variants, which emitted only relation heads, were retired once
+# Axis 2 chose ``joint``.
+VALID_VARIANTS: Set = {'joint', 'boundary_joint'}
 
 # T5 / Flan-T5 ship exactly <extra_id_0> .. <extra_id_99>. The roles take the top
 # of that range, leaving the rest to block markers; deriving the split keeps the
@@ -35,28 +35,20 @@ class S2GTokens:
         for i, name in enumerate(ALL_TOKEN_NAMES)
     }
 
+    # ``no_rel`` is unconditional: Axis 2 chose inline head rejection, so every
+    # relation-less block closes with it and the token is always active.
     base_tok_map = {
-        're':             {'e_type', 'r_type', 'nr_type', 'tail'},
-        'boundary_re':    {'r_type', 'nr_type', 'tail'},
-        'boundary_joint': {'r_type', 'nr_type', 'tail'},
-        'joint':          {'e_type', 'r_type', 'nr_type', 'tail'},
+        'joint':          {'e_type', 'r_type', 'nr_type', 'tail', 'no_rel'},
+        'boundary_joint': {'r_type', 'nr_type', 'tail', 'no_rel'},
     }
 
-    def __init__(
-            self,
-            variant: str,
-            use_rejection: bool = False,
-            inline_none: bool = False,
-        ) -> None:
+    def __init__(self, variant: str, use_rejection: bool = False) -> None:
         self.variant = variant
         self.use_rejection = use_rejection
-        self.inline_none = inline_none and variant in JOINT_VARIANTS
         self.active_tokens = self.base_tok_map.get(variant, self.base_tok_map['joint']).copy()
 
         if use_rejection:
             self.active_tokens.add('null')
-        if self.inline_none:
-            self.active_tokens.add('no_rel')
 
     @property
     def role_token_strs(self) -> Set[str]:

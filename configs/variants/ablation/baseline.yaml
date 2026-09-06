@@ -1,8 +1,8 @@
 # =============================================================================
 # S2G — CoNLL04 Ablation Baseline
 # =============================================================================
-# Axis 1 winner, carried into Axes 2 and 3: rolling markers · re · nr_type
-# nesting · "Extract" wording · direct.
+# Axes 1 and 2 winners, carried into Axis 3: rolling markers · joint (inline tail
+# types + <none> head rejection) · nr_type nesting · "Extract" wording · direct.
 #
 # Everything outside the `graph` and `prompt` blocks is held constant across all
 # runs (see ABLATION_PLAN.md §8). Only `train.seed` varies within an arm, and
@@ -29,7 +29,7 @@ data:
 model:
   name: google/flan-t5-base
   pretrained_checkpoint: null
-  variant: re
+  variant: joint
 
 tokenizer:
   max_source_length: 260
@@ -43,7 +43,6 @@ prompt:
 
 graph:
   nesting: nr_type                  # 'nr_type' | 'r_type' (B3) | 'none' (B4)
-  joint_tail_type: False            # inline tail types for `joint` (B1 vs B2)
   use_rejection: False              # True only for the CoT arm (C2)
   random_graph: False
   dedup: True                       # held constant across every run

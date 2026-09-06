@@ -285,10 +285,7 @@ def main() -> None:
     if hasattr(model.generation_config, "forced_bos_token_id"):
         model.generation_config.forced_bos_token_id = None
 
-    tokens = S2GTokens(
-        cfg.model.variant, use_rejection=cfg.graph.use_rejection,
-        inline_none=cfg.graph.inline_none,
-    )
+    tokens = S2GTokens(cfg.model.variant, use_rejection=cfg.graph.use_rejection)
     verify_token_integrity(tokenizer)
     model.to(device)
 
