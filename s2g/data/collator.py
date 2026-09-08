@@ -111,7 +111,8 @@ class S2GCollator:
         )
         enc = build_boundary_joint_encoder_input(
             pos_rel + neg_rel, inst['text'], 
-            random_order=self.random_prompt, prompt=self.prompt_type
+            random_order=self.random_prompt, prompt=self.prompt_type,
+            style=self.prompt_style,
         )
         blocks = organise_filter_and_block(
             inst['entities'], inst['relations'], set(), set(pos_rel),
@@ -120,7 +121,7 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'boundary_joint', self.tok, 
             nesting=self.nesting,
-            random_graph=self.random_graph, 
+            random_graph=self.random_graph, random_prompt=self.random_prompt,
             use_rejection=self.use_rejection, rejected_rel_types=neg_rel
         )
         return enc, dec
@@ -134,7 +135,8 @@ class S2GCollator:
         )
         enc = build_joint_encoder_input(
             pos_ent + neg_ent, pos_rel + neg_rel, inst['text'], 
-            random_order=self.random_prompt, prompt=self.prompt_type
+            random_order=self.random_prompt, prompt=self.prompt_type,
+            style=self.prompt_style,
         )
         blocks = organise_filter_and_block(
             inst['entities'], inst['relations'], set(pos_ent), set(pos_rel),
@@ -143,7 +145,7 @@ class S2GCollator:
         dec = build_graph(
             blocks, 'joint', self.tok, 
             nesting=self.nesting,
-            random_graph=self.random_graph, 
+            random_graph=self.random_graph, random_prompt=self.random_prompt,
             use_rejection=self.use_rejection, rejected_ent_types=neg_ent, 
             rejected_rel_types=neg_rel
         )

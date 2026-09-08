@@ -11,6 +11,7 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .prompt import order_types
 from .special_tokens import MAX_MARKER_SENTINELS, S2GTokens, VALID_VARIANTS
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,14 @@ VALID_NESTING: Set[str] = {'nr_type', 'r_type', 'none'}
 # Every linearisation token is a sentinel, so one pattern isolates them all during
 # parsing. Which of them are *roles* is decided by identity, never by pattern.
 SENTINEL_PATTERN = re.compile(r'(<extra_id_\d+>)')
+
+# The rejection tail, as emitted by ``append_rejection_tail``. The entity clause is
+# optional because ``boundary_joint`` deals in no entity types and says so by
+# omitting it, exactly as its prompt does.
+REJECTION_TAIL = re.compile(
+    r'missing\s+(?:entities\s*\[(?P<ents>[^\]]*)\]\s*and\s+)?relations\s*\[(?P<rels>[^\]]*)\]',
+    re.IGNORECASE,
+)
 
 
 def organise_filter_and_block(
@@ -99,16 +108,16 @@ def organise_filter_and_block(
     return blocks
 
 
-def max_emitted_blocks(use_rejection: bool = False) -> int:
+def max_emitted_blocks() -> int:
     """
     Ceiling on emitted blocks.
 
     Markers spend one sentinel per block, the first included — an n-block graph
-    uses ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — so the 95 sentinels below the
-    roles allow 95 blocks. Rejection claims one further index for its own marker
-    (Stage 3), leaving 94.
+    uses ``<extra_id_0>`` .. ``<extra_id_{n-1}>`` — so the 94 sentinels below the
+    roles allow 94 blocks. Rejection costs nothing here: ``<null>`` is a dedicated
+    role, not a rolling index, so it claims no marker.
     """
-    return MAX_MARKER_SENTINELS - 1 if use_rejection else MAX_MARKER_SENTINELS
+    return MAX_MARKER_SENTINELS
 
 
 def build_graph(
@@ -117,6 +126,7 @@ def build_graph(
         tokens: S2GTokens,
         nesting: str = 'nr_type',
         random_graph: bool = False,
+        random_prompt: bool = False,
         use_rejection: bool = False,
         rejected_ent_types: List[str] = None,
         rejected_rel_types: List[str] = None
@@ -156,7 +166,7 @@ def build_graph(
                 expanded.append((ent, []))
         emit = expanded
 
-    cap = max_emitted_blocks(use_rejection)
+    cap = max_emitted_blocks()
     if len(emit) > cap:
         logger.warning(
             "Truncating %d entity blocks to %d: no block marker exists beyond <extra_id_%d>.",
@@ -191,12 +201,12 @@ def build_graph(
         parts.append(" ".join(ent_toks))
 
     if use_rejection:
-        append_null_block(
+        append_rejection_tail(
             parts,
             tokens,
-            ent_types=(rejected_ent_types or []) if emits_types else [],
+            ent_types=(rejected_ent_types or []) if emits_types else None,
             rel_types=rejected_rel_types or [],
-            random_graph=random_graph
+            random_prompt=random_prompt,
         )
 
     return " ".join(parts).strip()
@@ -288,10 +298,15 @@ def parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[Reje
                 continue
 
         if state == 'NULL':
-            rejected.append(token)
-            state = 'IDLE'
-            i += 1
-            continue
+            # Everything from ``<null>`` on is the rejection tail. Consume it whole:
+            # nothing after the marker may reach an entity or relation block, and a
+            # tail that does not match is dropped rather than leaking into one.
+            match = REJECTION_TAIL.search(" ".join(raw_tokens[i:]))
+            if match:
+                for group in ('ents', 'rels'):
+                    listed = match.group(group)
+                    rejected.extend(t.strip() for t in (listed or '').split(',') if t.strip())
+            break
 
         if SENTINEL_PATTERN.fullmatch(token):
             # Any sentinel that is not an active role is a block marker. Its index is
@@ -391,20 +406,33 @@ def extract_triplets(entities: List[EntityBlock], include_types: bool = False) -
     return res
 
 
-def append_null_block(
+def append_rejection_tail(
         parts: List[str],
         tok: S2GTokens,
-        ent_types: List[str],
+        ent_types: Optional[List[str]],
         rel_types: List[str],
-        random_graph: bool
+        random_prompt: bool = False,
     ) -> None:
     """
-    Per-type rejection markers, ``<null> type`` for each sampled negative.
+    The Axis-3 rejection tail: one ``<null>``, then the sampled negatives in prose.
 
-    Stage 3 replaces this with the single-marker CoT rejection tail.
+    ``ent_types=None`` drops the entity clause entirely — ``boundary_joint`` deals
+    in no entity types, and its prompt asks only for missing relations, so its tail
+    answers only about relations.
+
+    Ordering follows ``random_prompt``, not ``random_graph``: the tail restates the
+    prompt's negatives, so it lists them the way the prompt did. It shares
+    ``order_types`` with the prompt builder rather than reimplementing the rule.
+
+    Empty lists still emit their brackets — the absence of negatives is itself the
+    answer, and a target that simply stopped would be indistinguishable from one
+    that was truncated.
     """
-    e_types = random.sample(ent_types, len(ent_types)) if random_graph else sorted(ent_types)
-    r_types = random.sample(rel_types, len(rel_types)) if random_graph else sorted(rel_types)
-    null_tok = tok.token_strs['null']
-    null_parts = [f"{null_tok} {t}" for t in e_types] + [f"{null_tok} {r}" for r in r_types]
-    parts.extend(null_parts)
+    r_types = ", ".join(order_types(rel_types, random_prompt))
+    tail = f"relations [{r_types}]"
+
+    if ent_types is not None:
+        e_types = ", ".join(order_types(ent_types, random_prompt))
+        tail = f"entities [{e_types}] and {tail}"
+
+    parts.append(f"{tok.token_strs['null']} Therefore, missing {tail}")

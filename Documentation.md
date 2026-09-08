@@ -65,7 +65,7 @@ This branch exists to run the CoNLL04 ablation study (`ABLATION_PLAN.md`). Axes 
    > The `re` and `boundary_re` variants, which gave a block only to relation heads, were retired when Axis 2 chose `joint`. Reproducing them requires an earlier revision.
 6. **Nesting (`graph.nesting`)**: How a head's 2nd+ relations are emitted — `nr_type` (one block per head, subsequent relations on `<nr_type>`), `r_type` (one block per head, every relation on `<r_type>`), or `none` (one relation per block, mention and type repeated). See §2.2.
 7. **Head rejection (`<no_rel>`)**: An entity that heads no relation closes its block with `<no_rel>`. Unconditional for both variants.
-8. **Schema rejection & Null Blocks**: Optional negative schema type markers (`<null> type`) included in Graph outputs to force explicit model rejection of absent entity or relation types. Distinct from `<no_rel>`, which is per-entity; this one is per schema type and gated on `graph.use_rejection` (Axis 3).
+8. **Schema rejection (`<null>`, `graph.use_rejection`)**: A single `<null>` closes the graph, followed by the sampled negatives in prose — `Therefore, missing entities [...] and relations [...]`, or `Therefore, missing relations [...]` under `boundary_joint`, which deals in no entity types. Exactly one `<null>` per target; everything after it is the tail. Distinct from `<no_rel>`, which is per-entity and unconditional; this one is per schema type and off by default.
 9. **Deduplication (`graph.dedup`)**: Controls whether repeated mentions collapse when the *target* is built. Deduplication keys on `(text, type)`, so homographs are never merged. Parsing never deduplicates. Held constant at `True` across the ablation.
 10. **Dual scoring**: Every evaluation reports text-based metrics and offset-based metrics (`offset_` prefix) side by side. Gold comes from the preprocessed annotations, never from parsing the model's own target format.
 
@@ -134,7 +134,7 @@ Defines the special token registry and tokenizer integrity verification. Nothing
 | `'r_type'` | `<extra_id_96>` | Primary relation type token in Graph |
 | `'nr_type'` | `<extra_id_97>` | Nested relation type token (for same head entity) in Graph |
 | `'tail'` | `<extra_id_98>` | Static tail token preceding tail entity text |
-| `'null'` | `<extra_id_99>` | Rejection marker; **active only with `use_rejection`** |
+| `'null'` | `<extra_id_99>` | Opens the schema-rejection tail; **active only with `use_rejection`** |
 
 > The map is *derived* from `ALL_TOKEN_NAMES` and `MAX_MARKER_SENTINELS` rather than written out, so the marker ceiling and the role block cannot drift into each other. A checkpoint records its map in `s2g_format.json`; scoring one under a different map would mis-parse every target rather than fail, so `evaluate.py` refuses outright.
 
@@ -184,7 +184,7 @@ Turns raw instance annotations into the block list that `build_graph` linearises
 
 Keying on `(text, type)` rather than text alone is what keeps **homographs** — `Washington` the person versus `Washington` the location — as separate blocks. Boundary variants carry `type=None`, so their key degenerates to text, as intended.
 
-##### `build_graph(ent_blocks, variant, tokens, nesting='nr_type', random_graph=False, use_rejection=False, rejected_ent_types=None, rejected_rel_types=None) -> str`
+##### `build_graph(ent_blocks, variant, tokens, nesting='nr_type', random_graph=False, random_prompt=False, use_rejection=False, rejected_ent_types=None, rejected_rel_types=None) -> str`
 Constructs the linearised nested Graph target string.
 
 * **Which blocks are emitted**: every entity, relation-less ones included. The head-only selection the RE variants used is gone with them, so the cap now applies to the full entity list.
@@ -201,11 +201,23 @@ Constructs the linearised nested Graph target string.
 
 * **Types**: `joint` always emits `<e_type>` for both the head and the tail; `boundary_joint` never does. One flag, `emits_types = variant == 'joint'`, governs both — Axis 2 settled it and it is not configurable.
 * **Head rejection**: a block with no relations closes on `<no_rel>`, unconditionally.
-* **Cap**: markers spend one sentinel per block, the first included, so the 95 indices below the roles allow **95** blocks; rejection reserves one further index for its own marker (Stage 3), leaving **94**. Excess blocks are truncated with a warning. The cap is what keeps a marker from ever reaching `<extra_id_95>` and colliding with a role.
-* **Rejection** (`use_rejection=True`) appends `<null> type` for every sampled negative, including when the graph is otherwise empty. Stage 3 of the port replaces this with the single-marker CoT rejection tail.
+* **Cap**: markers spend one sentinel per block, the first included, so the 94 indices below the roles allow **94** blocks. Excess blocks are truncated with a warning. The cap is what keeps a marker from ever reaching `<extra_id_94>` and colliding with a role. Rejection costs nothing here — `<null>` is a dedicated role, not a rolling index.
+* **Rejection** (`use_rejection=True`) appends the tail described under `append_rejection_tail`, including when the graph is otherwise empty.
 
-##### `max_emitted_blocks(use_rejection) -> int`
-The block ceiling, `MAX_MARKER_SENTINELS` less one when rejection reserves its index.
+##### `max_emitted_blocks() -> int`
+The block ceiling, `MAX_MARKER_SENTINELS`. It takes no arguments: an earlier draft reserved an index for a *positional* rejection marker, and keeping `<null>` a dedicated role removed the need.
+
+##### `append_rejection_tail(parts, tok, ent_types, rel_types, random_prompt=False) -> None`
+One `<null>`, then the sampled negatives in prose:
+
+```text
+<null> Therefore, missing entities [artifact, organization] and relations [founded, killed]
+<null> Therefore, missing relations [founded, killed]                    # boundary_joint
+```
+
+* **`ent_types=None` drops the entity clause entirely.** `boundary_joint` deals in no entity types and its prompt asks only about missing relations, so its tail answers only about relations. The caller passes `None` off the same `emits_types` gate that governs the graph body, so prompt, graph and tail cannot disagree.
+* **Ordering follows `random_prompt`, not `random_graph`.** The tail restates the prompt's negatives, so it lists them the way the prompt did — and it calls the prompt module's own `order_types` rather than reimplementing the rule, which is what stops the two drifting.
+* **Empty lists still emit their brackets.** `missing relations []` says there were no negatives; a target that simply stopped would be indistinguishable from one that was truncated.
 
 ##### `parse_graph(text: str, tok: S2GTokens) -> Tuple[List[EntityBlock], List[RejectedItem]]`
 * State-machine parser:
@@ -213,6 +225,7 @@ The block ceiling, `MAX_MARKER_SENTINELS` less one when rejection reserves its i
   2. **Identity before pattern.** Role tokens are matched by exact string equality against `tok.role_token_strs` *first*; any remaining sentinel is a block marker. This ordering is the whole reason roles and markers can share one range.
   3. **Seeds a first block**, so that content preceding any marker still lands somewhere — a malformed generation, or a target in the earlier format where the first block was unmarked. The seed is dropped if it never receives text, which is the normal case now that every block is marked.
   4. Reads relations introduced by `<r_type>` / `<nr_type>`, and tail text/type after `<tail>`.
+  5. On `<null>`, **consumes the remainder of the sequence** and matches it against `REJECTION_TAIL`, whose entity clause is optional so one pattern reads both variants' tails. Matched types land in `rejected`; nothing after `<null>` can reach an entity or relation block. A tail that fails to match yields no negatives and is still discarded — dropping a malformed tail is safer than letting its prose become a hallucinated entity, and it is why no prefix guard or malformed counter is needed.
 * **Append, never index.** Any marker appends a new block; its index is read and then **discarded**, so a repeated or out-of-order index in a malformed generation is harmless rather than corrupting.
 * **Parsing never deduplicates, for any variant.** Every emitted block is retained, so repeated mentions and repeated relations survive into scoring exactly as generated. Deduplication is a *target construction* concern only (`graph.dedup`), never a parsing one.
 
@@ -244,8 +257,20 @@ Extract all relations from [{r_types}] in the given text. Text: {text}
 ##### `build_instruction(rel_types, ent_types=None, use_ent_types=True, random_order=False) -> str`
 The instruction alone, without the source text — kept separate so Stage 3's CoT prompt can wrap the identical wording in a different frame.
 
-##### `build_encoder_input(text, rel_types, ent_types=None, use_ent_types=True, random_order=False, prompt='natural') -> str`
-Instruction + `" Text: {text}"`. `prompt.type: false` returns the raw text instead.
+##### `build_encoder_input(text, rel_types, ent_types=None, use_ent_types=True, random_order=False, prompt='natural', style='direct') -> str`
+Instruction + `" Text: {text}"`. `prompt.type: false` returns the raw text instead, **before** the style is considered: there is no instruction to wrap, so there is no frame to wrap it in.
+
+Under `style='cot'` (Axis 3, C2) the instruction is wrapped instead:
+
+```text
+Q: {instruction} Find the missing entities and relations. Text: {text} A: Let's think step-by-step
+Q: {instruction} Find the missing relations. Text: {text} A: Let's think step-by-step   # boundary_joint
+```
+
+The clause naming what to look for is gated on the same `use_ent_types` that drops the entity clause from the instruction, so the two halves of the prompt — and the rejection tail that answers them — always agree about whether the variant deals in entity types.
+
+##### `order_types(types, random_order) -> List[str]`
+The prompt's ordering rule: sorted unless shuffling is asked for. Public because `build_graph`'s rejection tail restates the prompt's negatives and has to list them the same way.
 
 Type lists are sorted unless `random_prompt`. Two thin per-variant wrappers remain — `build_joint_encoder_input` and `build_boundary_joint_encoder_input` — because `collator.py` dispatches by name.
 
@@ -336,9 +361,9 @@ Configuration is passed as a plain dict (assembled in `train.py` / `evaluate.py`
 | `prompt_type` | Passed through to the prompt builders (`'natural'`, or `'false'` for raw text). |
 | `random_prompt` | Shuffle schema type order in the prompt instead of sorting. |
 | `random_graph` | Shuffle entity and relation order in the target. |
-| `use_rejection` | Append `<null> type` markers for sampled negatives. |
+| `use_rejection` | Append the `<null>` rejection tail naming the sampled negatives. |
 | `nesting` | `'nr_type'` / `'r_type'` / `'none'` — see `build_graph`. |
-| `prompt_style` | `'direct'` or `'cot'`. Reserved for Stage 3; unused by the current builders. |
+| `prompt_style` | `'direct'` or `'cot'`. Passed to the prompt builders; `'cot'` wraps the instruction in the Axis-3 frame. |
 | `dedup` | Collapse entities on `(text, type)` and relations on the full quintuple during block building. See `organise_filter_and_block`. |
 | `max_steps`, `pos_rate_*`, `neg_rate_*`, `pos_max_*`, `neg_max_*` | Bernoulli curriculum endpoints. |
 | `seed` | Seeds the collator's private `random.Random`. |
@@ -753,8 +778,8 @@ This branch supersedes `main` (fixed markers) and `sentinel` (rolling markers): 
 | 2b — Nesting | B3 | `graph.nesting: r_type` |
 | | B4 | `graph.nesting: none` |
 | 3 — Prompts | C1 | "Mark" wording (hand edit in `prompt.py`) |
-| | C2 | `prompt.style: cot`, `graph.use_rejection: true` *(Stage 3, not yet implemented)* |
-| | control | `prompt.style: direct`, `graph.use_rejection: true` — separates rejection from CoT |
+| | C2 | `prompt.style: cot`, `graph.use_rejection: true` |
+| | C3 *(control)* | `prompt.style: direct`, `graph.use_rejection: true` — separates rejection from CoT |
 
 Stage 2a resolved in favour of `joint` with inline tail types and `<no_rel>` head rejection, over `joint` without them and over the `re` baseline. Stage 2b runs B3 and B4 on that winner, with the carried `nr_type` run as the third reference point. Boundary variants are **not** ablated — they are complementary to the typed variants rather than comparable, so `boundary_joint` is adopted alongside `joint` without a run.
 
@@ -789,4 +814,5 @@ Because all arms score the same test instances, compare them **paired on instanc
 
 * **NER metrics were not comparable across the Stage-2a `re` vs `joint` comparison.** Gold differed between them by construction: `build_gold_offsets` restricted `re` / `boundary_re` gold to relation participants, while `joint` scores against every annotated entity. The relation tuples were identical, so `strict_f1` — the deciding metric — *was* comparable; but every `ner_*` and `offset_ner_*` figure moved for reasons unrelated to the format under test. State this when reporting Axis 2; it no longer applies going forward, since only `joint` gold remains.
 * **B1 vs B2 moved the homograph ceiling.** With inline tail types, `resolve_tail_entities` no longer has to guess a tail's type by first-occurrence surface match (§2.2). Part of that `strict_f1` shift was therefore a measurement artefact rather than a format effect. CoNLL04 has 0 affected cases, which bounds the size of it — but state it when reporting the axis. Inline tail types are now unconditional, so the ceiling is closed for every arm that follows.
-* **C2 confounds CoT with rejection.** It is the only arm carrying `use_rejection`, so a CoT delta cannot be attributed to step-by-step framing alone. `prompt.style` and `graph.use_rejection` are orthogonal keys, so the *direct + rejection* control is a single config flip — 5 runs, ~35 minutes, and the only way to separate the two. Run it rather than caveating it.
+* **C2 confounds CoT with rejection.** It is the only arm carrying `use_rejection`, so a CoT delta cannot be attributed to step-by-step framing alone. `prompt.style` and `graph.use_rejection` are orthogonal keys, so C3 — *direct + rejection* — is a single config flip: 5 runs, ~35 minutes, and the only way to separate the two.
+* **Re-measure `max_target_length` before the CoT arms.** The rejection tail adds a marker plus a sentence carrying two bracketed type lists; the baseline's 210 will not cover it, and silent truncation reads as a format effect.

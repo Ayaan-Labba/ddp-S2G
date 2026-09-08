@@ -35,8 +35,13 @@ def check_format_support(ckpt, variant: str, fmt: Dict[str, Any]) -> None:
     retired = {}
     if variant not in VALID_VARIANTS:
         retired['variant'] = variant
-    # Absent means an older sidecar that predates the key; only an explicit False
-    # is a format this code cannot reproduce.
+    # Neither key is written any more — that is exactly why they are checked here.
+    # ``d023c99`` wrote both, so the Axis-2 arms' checkpoints carry them, and their
+    # ``token_strs`` cannot betray the difference: it was saved from the *class*
+    # map, which held every role whether or not the run emitted it. This is the
+    # only thing standing between a losing arm and a plausible wrong number.
+    # Absent means a sidecar predating the key; only an explicit False is a format
+    # this code cannot reproduce.
     for key in ('joint_tail_type', 'inline_none'):
         if fmt.get(key) is False:
             retired[key] = False

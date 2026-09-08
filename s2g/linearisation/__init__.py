@@ -7,7 +7,7 @@ from .special_tokens import (
 )
 from .prompt import (
     build_boundary_joint_encoder_input, build_joint_encoder_input,
-    build_encoder_input, build_instruction
+    build_encoder_input, build_instruction, order_types
 )
 from .graph import (
     EntityBlock, RejectedItem, Triplet, VALID_NESTING,
@@ -19,7 +19,7 @@ __all__ = [
     'S2GTokens', 'get_token_ids', 'verify_token_integrity',
     'MAX_MARKER_SENTINELS', 'VALID_VARIANTS', 'VALID_NESTING',
     'build_boundary_joint_encoder_input', 'build_joint_encoder_input',
-    'build_encoder_input', 'build_instruction',
+    'build_encoder_input', 'build_instruction', 'order_types',
     'EntityBlock', 'RejectedItem', 'Triplet', 'build_graph', 'extract_triplets',
     'max_emitted_blocks', 'organise_filter_and_block', 'parse_graph',
     'resolve_tail_entities'
